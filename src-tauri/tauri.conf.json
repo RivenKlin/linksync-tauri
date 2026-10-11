@@ -26,7 +26,14 @@
     "active": true,
     "icon": [
       "icons/icon.ico",
-      "icons/icon.png"
-    ]
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "linux": {
+      "deb": {
+        "maintainer": "duixiang team <duixiang@local>",
+        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
+      }
+    }
   }
 }

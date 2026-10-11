@@ -16,13 +16,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Build
-        working-directory: src-tauri
-        run: cargo build --release
+      - name: Install tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+      - name: Build .deb
+        run: tauri build --bundles deb
       - uses: actions/upload-artifact@v4
         with:
-          name: linksync-linux
-          path: src-tauri/target/release/linksync
+          name: linksync-linux-deb
+          path: src-tauri/target/release/bundle/deb/*.deb
 
   macos:
     runs-on: macos-14
@@ -34,16 +35,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Build arm64
-        working-directory: src-tauri
-        run: cargo build --release --target aarch64-apple-darwin
-      - name: Build x86_64
-        working-directory: src-tauri
-        run: cargo build --release --target x86_64-apple-darwin
-      - name: Create universal binary
-        working-directory: src-tauri
-        run: lipo -create -output target/release/linksync-universal target/aarch64-apple-darwin/release/linksync target/x86_64-apple-darwin/release/linksync
+      - name: Install tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+      - name: Build universal .dmg
+        run: tauri build --target universal-apple-darwin --bundles dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: linksync-macos
-          path: src-tauri/target/release/linksync-universal
+          name: linksync-macos-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
