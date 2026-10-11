@@ -31,7 +31,6 @@
     ],
     "linux": {
       "deb": {
-        "maintainer": "duixiang team <duixiang@local>",
         "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
       }
     }
