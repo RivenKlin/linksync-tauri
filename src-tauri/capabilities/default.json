@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/capability",
+  "identifier": "default",
+  "description": "LinkSync 主窗口权限",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize"
+  ]
+}

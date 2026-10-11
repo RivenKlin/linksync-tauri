@@ -1,0 +1,31 @@
+[package]
+name = "linksync"
+version = "2.0.0"
+description = "LinkSync 四人文件自动同步"
+authors = ["duixiang"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ureq = { version = "2", default-features = false, features = ["json"] }
+rfd = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "2"
+winreg = "0.52"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

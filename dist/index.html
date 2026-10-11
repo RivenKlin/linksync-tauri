@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LinkSync</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #ffffff;
+    --border: #ececec;
+    --text: #1f2328;
+    --muted: #8b8b93;
+    --accent: #3b5bdb;
+    --accent-soft: #edf1fd;
+    --green: #2f9e44;
+    --amber: #e8a013;
+    --red: #d94848;
+    --radius: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    user-select: none;
+    overflow: hidden;
+  }
+  .hidden { display: none !important; }
+
+  /* ---------- 成员选择 ---------- */
+  #member {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    padding: 32px;
+  }
+  #member .logo { width: 64px; height: 64px; }
+  #member h1 { font-size: 18px; font-weight: 600; }
+  #member p { color: var(--muted); font-size: 12.5px; margin-top: -12px; }
+  .members { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; max-width: 380px; }
+  .member-btn {
+    padding: 16px 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .member-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  #member .hint { font-size: 11.5px; color: var(--muted); max-width: 340px; text-align: center; line-height: 1.6; }
+
+  /* ---------- 主界面 ---------- */
+  #main { height: 100vh; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+  .topbar { display: flex; align-items: center; gap: 10px; }
+  .topbar .logo { width: 26px; height: 26px; }
+  .topbar .title { font-size: 14.5px; font-weight: 600; }
+  .badge {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .stat .label { color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+  .stat .value { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--green); }
+  .dot.off { background: var(--red); }
+  .dot.warn { background: var(--amber); }
+  .progress-wrap { margin-top: 14px; }
+  .progress-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+  .progress { height: 5px; background: #f0f0f1; border-radius: 999px; overflow: hidden; }
+  .progress > i { display: block; height: 100%; width: 0%; background: var(--accent); border-radius: 999px; transition: width .4s; }
+  .folder-row { display: flex; align-items: center; gap: 8px; }
+  .folder-path {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12.5px; color: var(--text);
+  }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  button.act {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  button.act:hover { border-color: #c9c9cf; background: #f5f5f6; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: #3450c0; border-color: #3450c0; }
+  button.warn { color: var(--amber); border-color: #f0dcae; background: #fdf7ea; }
+  .footer { display: flex; align-items: center; gap: 14px; }
+  .switch { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .switch input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+  .quit { margin-left: auto; color: var(--muted); border: none; background: none; font-size: 12px; cursor: pointer; }
+  .quit:hover { color: var(--red); }
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(8px);
+    background: #2b2f36; color: #fff; font-size: 12px; padding: 8px 16px;
+    border-radius: 8px; opacity: 0; pointer-events: none; transition: all .25s;
+    max-width: 80%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---------- 服务器信息弹窗 ---------- */
+  #srvmask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  #srvbox {
+    width: 360px; background: var(--card); border-radius: 12px;
+    padding: 18px 20px; box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  }
+  #srvbox h2 { font-size: 14.5px; font-weight: 600; margin-bottom: 14px; }
+  #srvbox .row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  #srvbox .row:last-of-type { border-bottom: none; }
+  #srvbox .row .k { color: var(--muted); }
+  #srvbox .row .v { font-weight: 600; }
+  #srvbox .bar { height: 5px; background: #f0f0f1; border-radius: 999px; overflow: hidden; margin: 10px 0 4px; }
+  #srvbox .bar > i { display: block; height: 100%; background: var(--green); border-radius: 999px; }
+  #srvbox .bar > i.hi { background: var(--amber); }
+  #srvbox .bar > i.full { background: var(--red); }
+  #srvbox .tip { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  #srvbox .close-row { text-align: right; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<section id="member" class="hidden">
+  <img class="logo" src="./icon.svg" alt="" />
+  <h1 id="m-title">欢迎使用 LinkSync</h1>
+  <p id="m-sub">首次运行，请选择你的成员身份</p>
+  <div class="members">
+    <button class="member-btn" data-m="A">成员 A</button>
+    <button class="member-btn" data-m="B">成员 B</button>
+    <button class="member-btn" data-m="C">成员 C</button>
+    <button class="member-btn" data-m="D">成员 D</button>
+  </div>
+  <div class="hint" id="m-hint">请向管理员确认自己对应的编号后再选择，每人身份互不相同，选错需联系管理员重置。</div>
+  <button class="act hidden" id="m-cancel">返回</button>
+</section>
+
+<section id="main" class="hidden">
+  <div class="topbar">
+    <img class="logo" src="./icon.svg" alt="" />
+    <span class="title">LinkSync 文件同步</span>
+    <span class="badge" id="who">成员 -</span>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div class="stat"><div class="label">服务器</div><div class="value"><span class="dot" id="d-srv"></span><span id="v-srv">检测中</span></div></div>
+      <div class="stat"><div class="label">队友在线</div><div class="value" id="v-peers">-</div></div>
+      <div class="stat"><div class="label">同步状态</div><div class="value" id="v-state">-</div></div>
+      <div class="stat"><div class="label">本地文件 / 速率</div><div class="value"><span id="v-files">-</span><span style="color:var(--muted);font-weight:400" id="v-rate"></span></div></div>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-top"><span id="v-pgt">已同步</span><span id="v-pgp">100%</span></div>
+      <div class="progress"><i id="pg"></i></div>
+    </div>
+  </div>
+
+  <div class="card folder-row">
+    <span style="color:var(--muted);flex:none">同步目录</span>
+    <span class="folder-path" id="v-folder">-</span>
+    <button class="act" id="b-changedir">更改</button>
+    <button class="act" id="b-open">打开</button>
+  </div>
+
+  <div class="btns">
+    <button class="act primary" id="b-pause">暂停同步</button>
+    <button class="act" id="b-adv">高级设置</button>
+    <button class="act" id="b-srvinfo">服务器信息</button>
+    <button class="act" id="b-switch">切换身份</button>
+  </div>
+
+  <div class="footer">
+    <label class="switch"><input type="checkbox" id="c-autostart" />开机自动启动</label>
+    <button class="quit" id="b-quit">退出程序</button>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<div id="srvmask" class="hidden">
+  <div id="srvbox">
+    <h2>服务器信息</h2>
+    <div class="row"><span class="k">磁盘总量</span><span class="v" id="s-total">-</span></div>
+    <div class="bar"><i id="s-bar"></i></div>
+    <div class="row"><span class="k">已用 / 剩余</span><span class="v" id="s-used">-</span></div>
+    <div class="row"><span class="k">同步文件</span><span class="v" id="s-files">-</span></div>
+    <div class="row"><span class="k">同步数据量</span><span class="v" id="s-bytes">-</span></div>
+    <div class="row"><span class="k">历史版本占用</span><span class="v" id="s-versions">-</span></div>
+    <div class="row"><span class="k">统计时间</span><span class="v" id="s-updated">-</span></div>
+    <div class="tip" id="s-tip">历史版本用于误删找回（保留 90 天）。磁盘剩余不足时管理员需清理。</div>
+    <div class="close-row"><button class="act" id="s-close">关闭</button></div>
+  </div>
+</div>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
+const $ = id => document.getElementById(id);
+let member = null, paused = false, folder = "", switching = false;
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+  return (n / 1073741824).toFixed(2) + " GB";
+}
+
+const STATE_TEXT = { idle: "已同步", syncing: "同步中", "sync-preparing": "准备中", error: "异常", offline: "离线" };
+
+async function refresh() {
+  if (!member) return;
+  let s;
+  try { s = await invoke("status"); } catch (e) { s = null; }
+  if (!s) {
+    $("d-srv").className = "dot off"; $("v-srv").textContent = "未连接";
+    $("v-state").textContent = "引擎未运行"; return;
+  }
+  $("d-srv").className = "dot " + (s.connected ? "on" : "off");
+  $("v-srv").textContent = s.connected ? "已连接" : "未连接";
+  $("v-peers").textContent = s.peers + " 人";
+  paused = s.paused;
+  $("b-pause").textContent = paused ? "恢复同步" : "暂停同步";
+  $("b-pause").className = "act " + (paused ? "warn" : "primary");
+  $("v-state").textContent = paused ? "已暂停" : (STATE_TEXT[s.state] || s.state);
+  $("v-files").textContent = s.local_files + " 个";
+  $("v-rate").textContent = s.rate > 2048 ? "   " + fmtBytes(s.rate) + "/s" : "";
+  const total = s.in_sync_bytes + s.need_bytes;
+  const pct = total === 0 ? 100 : Math.floor(s.in_sync_bytes * 100 / total);
+  $("pg").style.width = pct + "%";
+  $("v-pgp").textContent = pct + "%";
+  $("v-pgt").textContent = s.need_bytes > 0 ? "待同步 " + fmtBytes(s.need_bytes) : "已同步";
+}
+
+async function init() {
+  const info = await invoke("app_info");
+  member = info.member;
+  if (!member) {
+    $("member").classList.remove("hidden");
+    return;
+  }
+  enterMain(info);
+}
+
+function enterMain(info) {
+  member = info.member;
+  $("member").classList.add("hidden");
+  $("main").classList.remove("hidden");
+  $("who").textContent = "成员 " + info.member;
+  folder = info.folder;
+  $("v-folder").textContent = folder || "-";
+  $("c-autostart").checked = !!info.autostart;
+  refresh();
+  clearInterval(refresh._h);
+  refresh._h = setInterval(refresh, 2000);
+}
+
+document.querySelectorAll(".member-btn").forEach(b => {
+  b.addEventListener("click", async () => {
+    document.querySelectorAll(".member-btn").forEach(x => x.disabled = true);
+    try {
+      await invoke("set_member", { letter: b.dataset.m });
+      const info = await invoke("app_info");
+      switching = false;
+      $("m-cancel").classList.add("hidden");
+      enterMain(info);
+      toast("已绑定成员 " + b.dataset.m + "，同步已启动");
+    } catch (e) {
+      toast("设置失败：" + e);
+      document.querySelectorAll(".member-btn").forEach(x => x.disabled = false);
+    }
+  });
+});
+
+$("b-switch").addEventListener("click", () => {
+  switching = true;
+  document.querySelectorAll(".member-btn").forEach(x => x.disabled = false);
+  $("m-title").textContent = "切换成员身份";
+  $("m-sub").textContent = "当前为成员 " + member + "，选择新的身份";
+  $("m-hint").textContent = "切换后同步目录与文件不变，只是换一台设备身份；请勿与他人选同一身份。";
+  $("m-cancel").classList.remove("hidden");
+  clearInterval(refresh._h);
+  $("main").classList.add("hidden");
+  $("member").classList.remove("hidden");
+});
+
+$("m-cancel").addEventListener("click", () => {
+  switching = false;
+  $("m-cancel").classList.add("hidden");
+  $("m-title").textContent = "欢迎使用 LinkSync";
+  $("m-sub").textContent = "首次运行，请选择你的成员身份";
+  $("m-hint").textContent = "请向管理员确认自己对应的编号后再选择，每人身份互不相同，选错需联系管理员重置。";
+  $("member").classList.add("hidden");
+  $("main").classList.remove("hidden");
+  refresh();
+  clearInterval(refresh._h);
+  refresh._h = setInterval(refresh, 2000);
+});
+
+$("b-pause").addEventListener("click", async () => {
+  try {
+    await invoke("set_paused", { paused: !paused });
+    toast(paused ? "已恢复同步" : "已暂停同步");
+    setTimeout(refresh, 600);
+  } catch (e) { toast("操作失败：" + e); }
+});
+
+$("b-open").addEventListener("click", () => { if (folder) invoke("open_folder", { path: folder }); });
+$("b-adv").addEventListener("click", () => invoke("open_advanced"));
+
+$("b-srvinfo").addEventListener("click", async () => {
+  $("srvmask").classList.remove("hidden");
+  $("s-total").textContent = "加载中";
+  try {
+    const s = await invoke("server_info");
+    const pct = s.disk_pct || 0;
+    $("s-total").textContent = fmtBytes(s.disk_total);
+    $("s-used").textContent = fmtBytes(s.disk_used) + " / " + fmtBytes(s.disk_avail) + "（" + pct + "%）";
+    $("s-files").textContent = s.sync_files + " 个";
+    $("s-bytes").textContent = fmtBytes(s.sync_bytes);
+    $("s-versions").textContent = fmtBytes(s.versions_bytes);
+    $("s-updated").textContent = s.updated;
+    const bar = $("s-bar");
+    bar.style.width = pct + "%";
+    bar.className = pct >= 90 ? "full" : (pct >= 70 ? "hi" : "");
+  } catch (e) {
+    $("s-total").textContent = "获取失败";
+    $("s-used").textContent = "-";
+  }
+});
+$("s-close").addEventListener("click", () => $("srvmask").classList.add("hidden"));
+
+$("b-changedir").addEventListener("click", async () => {
+  try {
+    const p = await invoke("pick_folder");
+    if (!p) return;
+    await invoke("set_folder", { path: p });
+    folder = p;
+    $("v-folder").textContent = p;
+    toast("同步目录已更新");
+  } catch (e) { toast("更改失败：" + e); }
+});
+
+$("c-autostart").addEventListener("change", async e => {
+  try { await invoke("set_autostart", { on: e.target.checked }); toast(e.target.checked ? "已开启开机自启" : "已关闭开机自启"); }
+  catch (err) { e.target.checked = !e.target.checked; toast("设置失败：" + err); }
+});
+
+$("b-quit").addEventListener("click", () => invoke("quit"));
+
+listen("member-set", () => {});
+init();
+</script>
+</body>
+</html>

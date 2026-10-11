@@ -1,0 +1,49 @@
+name: build-linux-macos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linksync-linux
+          path: src-tauri/target/release/linksync
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build arm64
+        working-directory: src-tauri
+        run: cargo build --release --target aarch64-apple-darwin
+      - name: Build x86_64
+        working-directory: src-tauri
+        run: cargo build --release --target x86_64-apple-darwin
+      - name: Create universal binary
+        working-directory: src-tauri
+        run: lipo -create -output target/release/linksync-universal target/aarch64-apple-darwin/release/linksync target/x86_64-apple-darwin/release/linksync
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linksync-macos
+          path: src-tauri/target/release/linksync-universal

@@ -1,0 +1,5 @@
+src-tauri/target/
+src-tauri/gen/
+payload/stage/
+payload/lx/
+payload/mc/
