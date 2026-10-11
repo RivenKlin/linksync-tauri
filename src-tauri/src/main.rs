@@ -292,6 +292,36 @@ fn folder_path_from_config() -> String {
     String::new()
 }
 
+// 老用户升级：把已部署 config.xml 中 duixiang 文件夹的监视延迟修正为 1 秒
+fn fix_watcher_delay() {
+    let file = config_dir().join("config.xml");
+    let xml = match fs::read_to_string(&file) {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+    let mut changed = false;
+    let mut out = String::with_capacity(xml.len());
+    for line in xml.lines() {
+        let t = line.trim();
+        let mut l = line.to_string();
+        if t.starts_with("<folder ") && t.contains("id=\"duixiang\"") {
+            if let Some(i) = l.find("fsWatcherDelayS=\"") {
+                let vs = i + "fsWatcherDelayS=\"".len();
+                let ve = l[vs..].find('"').map(|x| vs + x).unwrap_or(vs);
+                if &l[vs..ve] != "1" {
+                    l.replace_range(vs..ve, "1");
+                    changed = true;
+                }
+            }
+        }
+        out.push_str(&l);
+        out.push('\n');
+    }
+    if changed {
+        let _ = fs::write(&file, out);
+    }
+}
+
 // 把当前 config.xml 中 duixiang 文件夹的 path 属性改为指定目录（切换身份时保留用户自定义目录）
 fn patch_folder_path(new_path: &str) -> Result<(), String> {
     let file = config_dir().join("config.xml");
@@ -592,6 +622,7 @@ fn main() {
         ])
         .setup(|app| {
             extract_payload()?;
+            fix_watcher_delay();
             // 已选过成员则直接拉起同步
             let state = app.state::<AppState>();
             if read_member().is_some() {
