@@ -1,9 +1,28 @@
-name: build-linux-macos
+name: build
 
 on:
   workflow_dispatch:
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+      - name: Build .exe
+        run: tauri build --bundles msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linksync-windows-exe
+          path: src-tauri/target/release/bundle/msi/*.msi
+
   linux:
     runs-on: ubuntu-22.04
     steps:
