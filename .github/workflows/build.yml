@@ -17,11 +17,14 @@ jobs:
       - name: Install tauri CLI
         run: npm install -g @tauri-apps/cli@^2
       - name: Build .exe
-        run: tauri build --bundles msi
+        run: |
+          cd src-tauri
+          cargo build --release --bin linksync
+          cp target/release/linksync.exe ../LinkSync.exe
       - uses: actions/upload-artifact@v4
         with:
           name: linksync-windows-exe
-          path: src-tauri/target/release/bundle/msi/*.msi
+          path: LinkSync.exe
 
   linux:
     runs-on: ubuntu-22.04
