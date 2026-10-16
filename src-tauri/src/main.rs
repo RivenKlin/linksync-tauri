@@ -292,18 +292,31 @@ fn folder_path_from_config() -> String {
     String::new()
 }
 
-// 老用户升级：把已部署 config.xml 中 duixiang 文件夹的监视延迟修正为 1 秒
-fn fix_watcher_delay() {
+// 老用户升级：修正已部署 config.xml —— 监视延迟 1 秒；关闭全局发现与中继（境内连不上，只会拖慢建连）
+// 返回 true 表示配置有改动，需要重启引擎才能生效
+fn fix_watcher_delay() -> bool {
     let file = config_dir().join("config.xml");
     let xml = match fs::read_to_string(&file) {
         Ok(x) => x,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let mut changed = false;
     let mut out = String::with_capacity(xml.len());
     for line in xml.lines() {
         let t = line.trim();
+        // 中继监听行整行删除
+        if t == "<listenAddress>dynamic+https://relays.syncthing.net/endpoint</listenAddress>" {
+            changed = true;
+            continue;
+        }
         let mut l = line.to_string();
+        if t == "<globalAnnounceEnabled>true</globalAnnounceEnabled>" {
+            l = "<globalAnnounceEnabled>false</globalAnnounceEnabled>".to_string();
+            changed = true;
+        } else if t == "<relaysEnabled>true</relaysEnabled>" {
+            l = "<relaysEnabled>false</relaysEnabled>".to_string();
+            changed = true;
+        }
         if t.starts_with("<folder ") && t.contains("id=\"duixiang\"") {
             if let Some(i) = l.find("fsWatcherDelayS=\"") {
                 let vs = i + "fsWatcherDelayS=\"".len();
@@ -320,6 +333,7 @@ fn fix_watcher_delay() {
     if changed {
         let _ = fs::write(&file, out);
     }
+    changed
 }
 
 // 把当前 config.xml 中 duixiang 文件夹的 path 属性改为指定目录（切换身份时保留用户自定义目录）
@@ -622,7 +636,11 @@ fn main() {
         ])
         .setup(|app| {
             extract_payload()?;
-            fix_watcher_delay();
+            // 老配置被修正时，杀掉可能在跑的旧引擎，让下面 start_sync 以新配置重启
+            if fix_watcher_delay() {
+                kill_all_syncthing();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
             // 已选过成员则直接拉起同步
             let state = app.state::<AppState>();
             if read_member().is_some() {
