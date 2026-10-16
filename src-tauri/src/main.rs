@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Runtime, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WindowEvent, Wry};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -29,10 +29,19 @@ const SYNC_BIN: &str = "syncthing.exe";
 #[cfg(not(windows))]
 const SYNC_BIN: &str = "syncthing";
 
+#[derive(Default)]
 struct AppState {
     child: Mutex<Option<Child>>,
     rate: Arc<Mutex<Option<(u64, Instant)>>>,
     paused: AtomicBool,
+    pause_item: Mutex<Option<MenuItem<Wry>>>,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn root() -> PathBuf {
@@ -196,6 +205,9 @@ fn start_sync(state: &AppState) -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
     state.paused.store(false, Ordering::SeqCst);
+    if let Some(item) = state.pause_item.lock().unwrap().as_ref() {
+        let _ = item.set_text("暂停同步");
+    }
     *state.child.lock().unwrap() = Some(child);
     Ok(())
 }
@@ -273,6 +285,7 @@ struct Status {
     in_sync_bytes: u64,
     local_files: u64,
     rate: u64,
+    recent: Vec<String>,
 }
 
 fn folder_path_from_config() -> String {
@@ -399,6 +412,7 @@ fn status(state: tauri::State<AppState>) -> Status {
         in_sync_bytes: 0,
         local_files: 0,
         rate: 0,
+        recent: Vec::new(),
     };
     let conns = match rest_json("GET", "/rest/system/connections", None) {
         Ok(v) => v,
@@ -424,15 +438,119 @@ fn status(state: tauri::State<AppState>) -> Status {
         }
         *g = Some((out.in_sync_bytes, now));
     }
+    // 最近同步动态：扫描同步目录，收集 15 秒内修改过的文件
+    collect_recent_files(&mut out.recent);
     out
+}
+
+// 最近同步动态：本机保存与队友传来的文件都会更新 mtime，直接按 mtime 判定，
+// 不依赖 /rest/events（Syncthing v2 不发 LocalChangeDetected 事件）
+fn collect_recent_files(recent: &mut Vec<String>) {
+    let dir = folder_path_from_config();
+    if dir.is_empty() {
+        return;
+    }
+    let base = Path::new(&dir);
+    let now = unix_now();
+    let mut hits: Vec<(u64, String)> = Vec::new();
+    walk_recent(base, base, now, 0, &mut hits);
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut seen: Vec<String> = Vec::new();
+    for (_, name) in hits {
+        if !seen.iter().any(|s| *s == name) {
+            seen.push(name);
+        }
+        if seen.len() >= 10 {
+            break;
+        }
+    }
+    *recent = seen;
+}
+
+fn walk_recent(base: &Path, dir: &Path, now: u64, depth: u32, hits: &mut Vec<(u64, String)>) {
+    if depth > 6 {
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let p = e.path();
+        if p.is_dir() {
+            if name == ".stfolder" || name == ".stversions" || name.starts_with(".syncthing~") {
+                continue;
+            }
+            walk_recent(base, &p, now, depth + 1, hits);
+        } else if let Ok(meta) = e.metadata() {
+            if let Ok(t) = meta.modified() {
+                let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                if now.saturating_sub(secs) <= 15 {
+                    if let Ok(rel) = p.strip_prefix(base) {
+                        hits.push((secs, rel.to_string_lossy().replace('\\', "/")));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 暂停/恢复统一入口：REST 触发 + 状态记录 + 托盘菜单文案同步
+fn apply_paused(app: &AppHandle, paused: bool) -> Result<(), String> {
+    let path = if paused { "/rest/system/pause" } else { "/rest/system/resume" };
+    rest_fire(path, None)?;
+    let state = app.state::<AppState>();
+    state.paused.store(paused, Ordering::SeqCst);
+    if let Some(item) = state.pause_item.lock().unwrap().as_ref() {
+        let _ = item.set_text(if paused { "恢复同步" } else { "暂停同步" });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn set_paused(app: AppHandle, paused: bool) -> Result<(), String> {
-    let path = if paused { "/rest/system/pause" } else { "/rest/system/resume" };
-    rest_fire(path, None)?;
-    app.state::<AppState>().paused.store(paused, Ordering::SeqCst);
-    Ok(())
+    apply_paused(&app, paused)
+}
+
+// 扫描同步目录中的 sync-conflict 冲突副本
+fn scan_conflicts(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let p = e.path();
+        if p.is_dir() {
+            if name == ".stfolder" || name == ".stversions" || name.starts_with(".syncthing~") {
+                continue;
+            }
+            scan_conflicts(base, &p, out);
+        } else if name.contains("sync-conflict") {
+            if let Ok(rel) = p.strip_prefix(base) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn conflicts() -> Vec<String> {
+    let folder = folder_path_from_config();
+    let mut out = Vec::new();
+    if !folder.is_empty() {
+        scan_conflicts(Path::new(&folder), Path::new(&folder), &mut out);
+    }
+    out.sort();
+    out.truncate(200);
+    out
+}
+
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app.notification().builder().title(&title).body(&body).show();
 }
 
 #[tauri::command]
@@ -442,6 +560,7 @@ fn get_folder() -> String {
 
 const SYNCINFO_URL: &str = "http://103.236.70.249:8766/syncinfo.json";
 const SYNCFILES_URL: &str = "http://103.236.70.249:8766/syncfiles.json";
+const PEERS_URL: &str = "http://103.236.70.249:8766/peers.json";
 
 #[tauri::command]
 fn server_info() -> Result<Value, String> {
@@ -472,6 +591,20 @@ fn server_files() -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn server_peers() -> Result<Value, String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_millis(3000))
+        .timeout_read(std::time::Duration::from_millis(5000))
+        .build();
+    agent
+        .get(PEERS_URL)
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_json::<Value>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_folder(path: String) -> Result<(), String> {
     let mut cfg = rest_json("GET", "/rest/system/config", None)?;
     let folders = cfg
@@ -494,17 +627,21 @@ fn pick_folder() -> Option<String> {
     rfd::FileDialog::new().pick_folder().map(|p| p.display().to_string())
 }
 
+fn open_path(path: &str) {
+    #[cfg(windows)]
+    let _ = Command::new("explorer").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = Command::new("xdg-open").arg(path).spawn();
+}
+
 #[tauri::command]
 fn open_folder(path: String) {
     if path.is_empty() {
         return;
     }
-    #[cfg(windows)]
-    let _ = Command::new("explorer").arg(&path).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(&path).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(&path).spawn();
+    open_path(&path);
 }
 
 #[tauri::command]
@@ -640,14 +777,17 @@ fn main() {
         }));
     }
     builder = builder
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             child: Mutex::new(None),
             rate: Arc::new(Mutex::new(None)),
             paused: AtomicBool::new(false),
+            pause_item: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             app_info, set_member, status, set_paused, get_folder, set_folder,
-            pick_folder, open_folder, open_advanced, set_autostart, quit, server_info, server_files
+            pick_folder, open_folder, open_advanced, set_autostart, quit, server_info, server_files,
+            server_peers, conflicts, notify
         ])
         .setup(|app| {
             extract_payload()?;
@@ -663,14 +803,32 @@ fn main() {
             }
             // 托盘
             let show = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
+            let open_i = MenuItem::with_id(app, "open", "打开同步文件夹", true, None::<&str>)?;
+            let pause_i = MenuItem::with_id(app, "pause", "暂停同步", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit_i])?;
+            {
+                let st = app.state::<AppState>();
+                let paused = st.paused.load(Ordering::SeqCst);
+                let _ = pause_i.set_text(if paused { "恢复同步" } else { "暂停同步" });
+                *st.pause_item.lock().unwrap() = Some(pause_i.clone());
+            }
+            let menu = Menu::with_items(app, &[&show, &open_i, &pause_i, &quit_i])?;
             TrayIconBuilder::with_id("tray")
                 .menu(&menu)
                 .tooltip("LinkSync 文件同步")
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "show" => show_main(app),
+                    "open" => {
+                        let p = folder_path_from_config();
+                        if !p.is_empty() {
+                            open_path(&p);
+                        }
+                    }
+                    "pause" => {
+                        let cur = app.state::<AppState>().paused.load(Ordering::SeqCst);
+                        let _ = apply_paused(app, !cur);
+                    }
                     "quit" => {
                         EXITING.store(true, Ordering::SeqCst);
                         let st = app.state::<AppState>();

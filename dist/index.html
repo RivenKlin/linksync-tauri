@@ -153,6 +153,39 @@
   #srvbox .flist .fitem .fmeta { color: var(--muted); font-weight: 400; flex-shrink: 0; }
   #srvbox .flist .empty { color: var(--muted); }
   #srvbox .close-row { text-align: right; margin-top: 12px; }
+  #srvbox .fl-head { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  #srvbox .fl-head .fl-title { margin-top: 0; flex: none; }
+  #srvbox .fl-head input {
+    flex: 1; min-width: 0; padding: 5px 9px; border: 1px solid var(--border);
+    border-radius: 7px; font-size: 12px; background: var(--bg); color: var(--text);
+  }
+  #srvbox .fl-head input:focus { outline: none; border-color: var(--accent); }
+
+  /* ---------- 最近动态 / 冲突提醒 ---------- */
+  .recent-row { margin-top: 8px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conflict-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--amber); cursor: pointer; }
+  .conflict-row:hover { text-decoration: underline; }
+  .peer { display: inline-flex; align-items: center; gap: 4px; margin-right: 9px; font-size: 13px; }
+  .peer.self { color: var(--accent); }
+
+  /* ---------- 冲突弹窗 ---------- */
+  #cfmask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  #cfbox {
+    width: 380px; background: var(--card); border-radius: 12px;
+    padding: 18px 20px; box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  }
+  #cfbox h2 { font-size: 14.5px; font-weight: 600; margin-bottom: 10px; }
+  #cfbox .tip { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+  #cfbox .flist {
+    max-height: 240px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.8;
+  }
+  #cfbox .flist .cf-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #cfbox .flist .empty { color: var(--muted); }
+  #cfbox .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -189,6 +222,10 @@
       <div class="progress-top"><span id="v-pgt">已同步</span><span id="v-pgp">100%</span></div>
       <div class="progress"><i id="pg"></i></div>
     </div>
+    <div class="recent-row hidden" id="recent-row"></div>
+    <div class="conflict-row hidden" id="conflict-row">
+      <span class="dot warn"></span><span id="conflict-text"></span><span>点击查看</span>
+    </div>
   </div>
 
   <div class="card folder-row">
@@ -224,9 +261,25 @@
     <div class="row"><span class="k">历史版本占用</span><span class="v" id="s-versions">-</span></div>
     <div class="row"><span class="k">统计时间</span><span class="v" id="s-updated">-</span></div>
     <div class="tip" id="s-tip">历史版本用于误删找回（保留 90 天）。磁盘剩余不足时管理员需清理。</div>
-    <div class="fl-title">服务器文件</div>
+    <div class="fl-head">
+      <span class="fl-title">服务器文件</span>
+      <input id="s-fsearch" placeholder="搜索文件名" />
+      <button class="act" id="s-frefresh">刷新</button>
+    </div>
     <div class="flist" id="s-flist"><span class="empty">加载中</span></div>
     <div class="close-row"><button class="act" id="s-close">关闭</button></div>
+  </div>
+</div>
+
+<div id="cfmask" class="hidden">
+  <div id="cfbox">
+    <h2>同步冲突文件</h2>
+    <div class="tip">同一文件被多人在离线期间分别修改时，会生成 sync-conflict 副本并保留双方版本。请打开同步文件夹确认内容后，删除多余的副本。</div>
+    <div class="flist" id="cf-list"></div>
+    <div class="close-row">
+      <button class="act" id="cf-open">打开同步文件夹</button>
+      <button class="act" id="cf-close">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -236,6 +289,8 @@ const { listen } = window.__TAURI__.event;
 
 const $ = id => document.getElementById(id);
 let member = null, paused = false, folder = "", switching = false;
+let tick = 0, peerMap = null, conflictList = [], lastConflictCount = 0;
+let discSince = 0, discNotified = false, diskWarned = false, lastFiles = [];
 
 function toast(msg) {
   const t = $("toast");
@@ -256,6 +311,7 @@ const STATE_TEXT = { idle: "已同步", syncing: "同步中", "sync-preparing": 
 
 async function refresh() {
   if (!member) return;
+  tick++;
   let s;
   try { s = await invoke("status"); } catch (e) { s = null; }
   if (!s) {
@@ -264,7 +320,7 @@ async function refresh() {
   }
   $("d-srv").className = "dot " + (s.connected ? "on" : "off");
   $("v-srv").textContent = s.connected ? "已连接" : "未连接";
-  $("v-peers").textContent = s.peers + " 人";
+  renderPeers();
   paused = s.paused;
   $("b-pause").textContent = paused ? "恢复同步" : "暂停同步";
   $("b-pause").className = "act " + (paused ? "warn" : "primary");
@@ -276,6 +332,75 @@ async function refresh() {
   $("pg").style.width = pct + "%";
   $("v-pgp").textContent = pct + "%";
   $("v-pgt").textContent = s.need_bytes > 0 ? "待同步 " + fmtBytes(s.need_bytes) : "已同步";
+  // 最近同步动态
+  const rr = $("recent-row");
+  if (s.recent && s.recent.length) {
+    rr.textContent = "最近同步 " + s.recent.length + " 个文件：" + s.recent.join("、");
+    rr.classList.remove("hidden");
+  } else {
+    rr.classList.add("hidden");
+  }
+  // 断连超过 60 秒通知一次，重连后重置
+  if (!s.connected) {
+    if (!discSince) discSince = Date.now();
+    else if (!discNotified && Date.now() - discSince > 60000) {
+      discNotified = true;
+      invoke("notify", { title: "同步已断开", body: "LinkSync 已连接服务器但无法同步，请检查本机网络后重试" }).catch(() => {});
+    }
+  } else {
+    discSince = 0; discNotified = false;
+  }
+  // 每 10 秒：冲突扫描 + 队友在线；每 60 秒：服务器磁盘检查
+  if (tick % 5 === 0) { checkConflicts(); fetchPeers(); }
+  if (tick % 30 === 0) checkDisk();
+}
+
+function renderPeers() {
+  const el = $("v-peers");
+  if (!peerMap) { el.innerHTML = '<span style="color:var(--muted);font-weight:400">-</span>'; return; }
+  el.innerHTML = ["A", "B", "C", "D"].map(L => {
+    const on = !!peerMap[L];
+    const self = L === member;
+    return '<span class="peer' + (self ? " self" : "") + '"><span class="dot ' + (on ? "on" : "off") + '"></span>' + L + (self ? "(我)" : "") + "</span>";
+  }).join("");
+}
+
+async function fetchPeers() {
+  try {
+    const d = await invoke("server_peers");
+    peerMap = d && d.peers ? d.peers : null;
+  } catch (e) { peerMap = null; }
+  renderPeers();
+}
+
+async function checkConflicts() {
+  let arr = [];
+  try { arr = await invoke("conflicts"); } catch (e) { return; }
+  conflictList = arr;
+  const n = arr.length;
+  const row = $("conflict-row");
+  if (n > 0) {
+    $("conflict-text").textContent = n + " 个冲突文件";
+    row.classList.remove("hidden");
+    if (lastConflictCount === 0) {
+      invoke("notify", { title: "发现同步冲突", body: "同步目录中有 " + n + " 个冲突文件，请检查处理" }).catch(() => {});
+    }
+  } else {
+    row.classList.add("hidden");
+  }
+  lastConflictCount = n;
+}
+
+async function checkDisk() {
+  if (diskWarned) return;
+  try {
+    const s = await invoke("server_info");
+    const pct = s.disk_pct || 0;
+    if (pct >= 90) {
+      diskWarned = true;
+      invoke("notify", { title: "服务器空间不足", body: "同步服务器磁盘已使用 " + pct + "%，请联系管理员清理" }).catch(() => {});
+    }
+  } catch (e) {}
 }
 
 async function init() {
@@ -297,6 +422,8 @@ function enterMain(info) {
   $("v-folder").textContent = folder || "-";
   $("c-autostart").checked = !!info.autostart;
   refresh();
+  fetchPeers();
+  checkConflicts();
   clearInterval(refresh._h);
   refresh._h = setInterval(refresh, 2000);
 }
@@ -354,6 +481,47 @@ $("b-pause").addEventListener("click", async () => {
 $("b-open").addEventListener("click", () => { if (folder) invoke("open_folder", { path: folder }); });
 $("b-adv").addEventListener("click", () => invoke("open_advanced"));
 
+function renderFiles(arr) {
+  const fl = $("s-flist");
+  if (!arr || !arr.length) {
+    fl.innerHTML = '<span class="empty">（暂无文件）</span>';
+    return;
+  }
+  fl.innerHTML = "";
+  for (const it of arr) {
+    const parts = it.p.split("/");
+    const row = document.createElement("div");
+    row.className = "fitem" + (it.d ? " dir" : "");
+    row.style.paddingLeft = (parts.length - 1) * 14 + "px";
+    const nm = document.createElement("span");
+    nm.className = "fname";
+    nm.textContent = it.d ? parts[parts.length - 1] + "/" : parts[parts.length - 1];
+    row.appendChild(nm);
+    const meta = document.createElement("span");
+    meta.className = "fmeta";
+    meta.textContent = it.d ? "" : fmtBytes(it.s) + " · " + it.m;
+    row.appendChild(meta);
+    fl.appendChild(row);
+  }
+}
+
+function applyFileFilter() {
+  const q = $("s-fsearch").value.trim().toLowerCase();
+  renderFiles(q ? lastFiles.filter(it => it.p.toLowerCase().includes(q)) : lastFiles);
+}
+
+async function loadServerFiles() {
+  $("s-flist").innerHTML = '<span class="empty">加载中</span>';
+  try {
+    lastFiles = (await invoke("server_files")) || [];
+  } catch (e) {
+    lastFiles = [];
+    $("s-flist").innerHTML = '<span class="empty">文件列表获取失败</span>';
+    return;
+  }
+  applyFileFilter();
+}
+
 $("b-srvinfo").addEventListener("click", async () => {
   $("srvmask").classList.remove("hidden");
   $("s-total").textContent = "加载中";
@@ -373,35 +541,27 @@ $("b-srvinfo").addEventListener("click", async () => {
     $("s-total").textContent = "获取失败";
     $("s-used").textContent = "-";
   }
-  const fl = $("s-flist");
-  fl.innerHTML = '<span class="empty">加载中</span>';
-  try {
-    const arr = await invoke("server_files");
-    if (!arr || !arr.length) {
-      fl.innerHTML = '<span class="empty">（暂无文件）</span>';
-    } else {
-      fl.innerHTML = "";
-      for (const it of arr) {
-        const parts = it.p.split("/");
-        const row = document.createElement("div");
-        row.className = "fitem" + (it.d ? " dir" : "");
-        row.style.paddingLeft = (parts.length - 1) * 14 + "px";
-        const nm = document.createElement("span");
-        nm.className = "fname";
-        nm.textContent = it.d ? parts[parts.length - 1] + "/" : parts[parts.length - 1];
-        row.appendChild(nm);
-        const meta = document.createElement("span");
-        meta.className = "fmeta";
-        meta.textContent = it.d ? "" : fmtBytes(it.s) + " · " + it.m;
-        row.appendChild(meta);
-        fl.appendChild(row);
-      }
-    }
-  } catch (e) {
-    fl.innerHTML = '<span class="empty">文件列表获取失败</span>';
-  }
+  loadServerFiles();
 });
 $("s-close").addEventListener("click", () => $("srvmask").classList.add("hidden"));
+$("s-fsearch").addEventListener("input", applyFileFilter);
+$("s-frefresh").addEventListener("click", loadServerFiles);
+
+// 冲突弹窗
+$("conflict-row").addEventListener("click", () => {
+  const list = $("cf-list");
+  list.innerHTML = "";
+  for (const p of conflictList) {
+    const d = document.createElement("div");
+    d.className = "cf-item";
+    d.title = p;
+    d.textContent = p;
+    list.appendChild(d);
+  }
+  $("cfmask").classList.remove("hidden");
+});
+$("cf-open").addEventListener("click", () => { if (folder) invoke("open_folder", { path: folder }); });
+$("cf-close").addEventListener("click", () => $("cfmask").classList.add("hidden"));
 
 $("b-changedir").addEventListener("click", async () => {
   try {
