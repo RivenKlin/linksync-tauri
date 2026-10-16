@@ -1,6 +1,6 @@
 [package]
 name = "linksync"
-version = "2.0.0"
+version = "2.2.0"
 description = "LinkSync 四人文件自动同步"
 authors = ["duixiang"]
 edition = "2021"
@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = { version = "2", default-features = false, features = ["json"] }
+sha2 = "0.10"
 rfd = "0.15"
 tauri-plugin-notification = "2"
 

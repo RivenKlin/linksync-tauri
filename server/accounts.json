@@ -1,0 +1,7 @@
+{
+  "A": {"passhash": "7827cd0d6814d31816e8fb547a08d11113c13dc5644af3ee770c5e6d93f5efec", "member": "A", "enabled": 1},
+  "B": {"passhash": "accf1e22776343fa92f58f31d32d780bafa5a92f9263cef3618cd8da14239c74", "member": "B", "enabled": 1},
+  "C": {"passhash": "71b0a82fbe0ce7c459aebf09aa2467d9d757f8b85322c002c60b5b57588f6509", "member": "C", "enabled": 1},
+  "D": {"passhash": "33c1103fc85baa7039be283e06a754a84490887382e446014783af2edb35edad", "member": "D", "enabled": 1},
+  "ADMIN": {"passhash": "e6da73a550cde2bd18fa90ac3ee44bbe8129aa4eb2d7f61c7c6e4c77762533ad", "member": "ADMIN", "enabled": 1}
+}

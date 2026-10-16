@@ -30,7 +30,7 @@
   }
   .hidden { display: none !important; }
 
-  /* ---------- 成员选择 ---------- */
+  /* ---------- 登录 ---------- */
   #member {
     height: 100vh;
     display: flex;
@@ -43,19 +43,32 @@
   #member .logo { width: 64px; height: 64px; }
   #member h1 { font-size: 18px; font-weight: 600; }
   #member p { color: var(--muted); font-size: 12.5px; margin-top: -12px; }
-  .members { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; width: 100%; max-width: 380px; }
-  .member-btn {
-    padding: 16px 0;
+  .login-form { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px; }
+  .login-form input {
+    padding: 11px 12px;
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-size: 14px;
-    font-weight: 600;
     color: var(--text);
-    cursor: pointer;
-    transition: all .15s;
+    outline: none;
+    transition: border-color .15s;
   }
-  .member-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .login-form input:focus { border-color: var(--accent); }
+  .login-btn {
+    padding: 11px 0;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+  .login-btn:hover { opacity: .9; }
+  .login-btn:disabled { opacity: .55; cursor: default; }
+  .login-err { font-size: 12px; color: var(--red); text-align: center; min-height: 0; }
   #member .hint { font-size: 11.5px; color: var(--muted); max-width: 340px; text-align: center; line-height: 1.6; }
 
   /* ---------- 主界面 ---------- */
@@ -153,6 +166,25 @@
   #srvbox .flist .fitem .fmeta { color: var(--muted); font-weight: 400; flex-shrink: 0; }
   #srvbox .flist .empty { color: var(--muted); }
   #srvbox .close-row { text-align: right; margin-top: 12px; }
+
+  /* ---------- 修改密码弹窗 ---------- */
+  #passmask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  #passbox {
+    width: 320px; background: var(--card); border-radius: 12px;
+    padding: 18px 20px; box-shadow: 0 8px 30px rgba(0,0,0,.18);
+  }
+  #passbox h2 { font-size: 14.5px; font-weight: 600; margin-bottom: 14px; }
+  #passbox .prow { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+  #passbox .prow label { font-size: 12px; color: var(--muted); }
+  #passbox input {
+    padding: 9px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 13px; color: var(--text); outline: none;
+  }
+  #passbox input:focus { border-color: var(--accent); }
+  #passbox .btn-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   #srvbox .fl-head { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
   #srvbox .fl-head .fl-title { margin-top: 0; flex: none; }
   #srvbox .fl-head input {
@@ -186,6 +218,45 @@
   #cfbox .flist .cf-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #cfbox .flist .empty { color: var(--muted); }
   #cfbox .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+  /* ---------- 冲突处理 / 历史 / 日志 ---------- */
+  button.mini { padding: 3px 8px; font-size: 11px; border-radius: 6px; }
+  .cf-item2 { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .cf-item2:last-child { border-bottom: none; }
+  .cf-names { flex: 1; min-width: 0; }
+  .cf-names .cf-orig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cf-names .cf-copy { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cf-acts { flex: none; display: flex; gap: 4px; }
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .maskbox { width: 400px; max-height: 86vh; overflow-y: auto; background: var(--card); border-radius: 12px; padding: 18px 20px; box-shadow: 0 8px 30px rgba(0,0,0,.18); }
+  .maskbox h2 { font-size: 14.5px; font-weight: 600; margin-bottom: 10px; }
+  .maskbox .m-tip { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin-bottom: 8px; }
+  .maskbox .m-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .maskbox .m-head input { flex: 1; min-width: 0; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; background: var(--bg); color: var(--text); }
+  .maskbox .m-head input:focus { outline: none; border-color: var(--accent); }
+  .hlist { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; }
+  .hlist .empty { color: var(--muted); display: block; padding: 8px 0; }
+  .hrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .hrow:last-child { border-bottom: none; }
+  .hrow .hn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hrow .hm { color: var(--muted); font-size: 11px; flex: none; }
+  .hrow .hd { flex: none; font-size: 11px; width: 34px; text-align: center; border-radius: 6px; padding: 2px 0; }
+  .hrow .hd.in { color: var(--green); background: #ebf7ee; }
+  .hrow .hd.local { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- 分享 / 限速 ---------- */
+  .sharebtn { flex: none; font-size: 11px; padding: 2px 9px; border: 1px solid var(--border); background: #f7f7f8; color: var(--accent); border-radius: 6px; cursor: pointer; }
+  .sharebtn:hover { border-color: var(--accent); }
+  .maskbox .frow { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+  .maskbox .frow label { font-size: 12px; color: var(--muted); }
+  .maskbox .frow input { padding: 9px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); outline: none; }
+  .maskbox .frow input:focus { border-color: var(--accent); }
+  .days-row { display: flex; gap: 8px; margin: 10px 0 4px; }
+  .days-row button { flex: 1; padding: 8px 0; border: 1px solid var(--border); background: #fff; border-radius: 8px; font-size: 12.5px; cursor: pointer; color: var(--text); }
+  .days-row button.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .linkrow { display: flex; gap: 6px; margin-top: 10px; }
+  .linkrow input { flex: 1; min-width: 0; font-size: 11.5px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: #f7f7f8; color: var(--text); }
+  .linkrow button { flex: none; }
 </style>
 </head>
 <body>
@@ -193,14 +264,14 @@
 <section id="member" class="hidden">
   <img class="logo" src="./icon.svg" alt="" />
   <h1 id="m-title">欢迎使用 LinkSync</h1>
-  <p id="m-sub">首次运行，请选择你的成员身份</p>
-  <div class="members">
-    <button class="member-btn" data-m="A">成员 A</button>
-    <button class="member-btn" data-m="B">成员 B</button>
-    <button class="member-btn" data-m="C">成员 C</button>
-    <button class="member-btn" data-m="D">成员 D</button>
-  </div>
-  <div class="hint" id="m-hint">请向管理员确认自己对应的编号后再选择，每人身份互不相同，选错需联系管理员重置。</div>
+  <p id="m-sub">请使用管理员分配的账号登录</p>
+  <form class="login-form" id="login-form" autocomplete="off">
+    <input type="text" id="l-user" placeholder="账号" maxlength="16" />
+    <input type="password" id="l-pass" placeholder="密码" maxlength="64" />
+    <button type="submit" class="login-btn" id="l-btn">登录并开始同步</button>
+    <div class="login-err hidden" id="l-err"></div>
+  </form>
+  <div class="hint" id="m-hint">账号密码由管理员统一分配，忘记密码请联系管理员。</div>
   <button class="act hidden" id="m-cancel">返回</button>
 </section>
 
@@ -239,6 +310,10 @@
     <button class="act primary" id="b-pause">暂停同步</button>
     <button class="act" id="b-adv">高级设置</button>
     <button class="act" id="b-srvinfo">服务器信息</button>
+    <button class="act" id="b-history">文件历史</button>
+    <button class="act" id="b-log">同步日志</button>
+    <button class="act" id="b-rate">限速</button>
+    <button class="act" id="b-pass">修改密码</button>
     <button class="act" id="b-switch">切换身份</button>
   </div>
 
@@ -249,6 +324,20 @@
 </section>
 
 <div id="toast"></div>
+
+<div id="passmask" class="hidden">
+  <div id="passbox">
+    <h2>修改密码</h2>
+    <div class="prow"><label>旧密码</label><input type="password" id="p-old" maxlength="64" /></div>
+    <div class="prow"><label>新密码（至少 6 位）</label><input type="password" id="p-new" maxlength="64" /></div>
+    <div class="prow"><label>确认新密码</label><input type="password" id="p-new2" maxlength="64" /></div>
+    <div class="login-err hidden" id="p-err"></div>
+    <div class="btn-row">
+      <button class="act" id="p-cancel">取消</button>
+      <button class="act primary" id="p-save">保存</button>
+    </div>
+  </div>
+</div>
 
 <div id="srvmask" class="hidden">
   <div id="srvbox">
@@ -273,12 +362,74 @@
 
 <div id="cfmask" class="hidden">
   <div id="cfbox">
-    <h2>同步冲突文件</h2>
-    <div class="tip">同一文件被多人在离线期间分别修改时，会生成 sync-conflict 副本并保留双方版本。请打开同步文件夹确认内容后，删除多余的副本。</div>
+    <h2>同步冲突处理</h2>
+    <div class="tip">同一文件被多人在离线期间分别修改时，会生成冲突副本并保留双方版本。可直接用副本覆盖原文件、删除多余副本，或在文件夹中定位后手动对比。</div>
     <div class="flist" id="cf-list"></div>
     <div class="close-row">
       <button class="act" id="cf-open">打开同步文件夹</button>
       <button class="act" id="cf-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="hsmask" class="mask hidden">
+  <div class="maskbox">
+    <h2>文件历史版本</h2>
+    <div class="m-tip">误删或误改的文件可从这里恢复，历史版本保留 90 天。</div>
+    <div class="m-head">
+      <input id="h-search" placeholder="搜索文件名" />
+      <button class="act" id="h-refresh">刷新</button>
+    </div>
+    <div class="hlist" id="h-list"><span class="empty">加载中</span></div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;margin-top:12px">
+      <button class="act" id="h-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="shmask" class="mask hidden">
+  <div class="maskbox" style="width:360px">
+    <h2>生成分享链接</h2>
+    <div class="m-tip" id="sh-file" style="word-break:break-all"></div>
+    <div style="font-size:12px;color:var(--muted)">有效期</div>
+    <div class="days-row">
+      <button data-d="1">1 天</button>
+      <button data-d="7" class="sel">7 天</button>
+      <button data-d="30">30 天</button>
+    </div>
+    <div class="m-tip" id="sh-exp"></div>
+    <div class="linkrow" id="sh-linkrow" style="display:none">
+      <input id="sh-link" readonly />
+      <button class="act" id="b-shcopy">复制</button>
+    </div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="act" id="sh-close">关闭</button>
+      <button class="act primary" id="b-shgen">生成</button>
+    </div>
+  </div>
+</div>
+
+<div id="rtmask" class="mask hidden">
+  <div class="maskbox" style="width:320px">
+    <h2>同步限速</h2>
+    <div class="m-tip">单位 KB/s，填 0 表示不限速。仅对本机生效，保存后立即应用。</div>
+    <div class="frow"><label>上传限速（KB/s）</label><input id="rt-send" type="number" min="0" step="10" /></div>
+    <div class="frow"><label>下载限速（KB/s）</label><input id="rt-recv" type="number" min="0" step="10" /></div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="act" id="rt-cancel">取消</button>
+      <button class="act primary" id="rt-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="lgmask" class="mask hidden">
+  <div class="maskbox">
+    <h2>同步日志</h2>
+    <div class="m-tip">记录本机最近的文件变动：收到=队友传来，本地=本机新增或修改。</div>
+    <div class="hlist" id="lg-list"><span class="empty">加载中</span></div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="act" id="lg-clear">清空</button>
+      <button class="act" id="lg-close">关闭</button>
     </div>
   </div>
 </div>
@@ -291,6 +442,7 @@ const $ = id => document.getElementById(id);
 let member = null, paused = false, folder = "", switching = false;
 let tick = 0, peerMap = null, conflictList = [], lastConflictCount = 0;
 let discSince = 0, discNotified = false, diskWarned = false, lastFiles = [];
+let APPVER = "0.0.0", histList = [], dropBound = false;
 
 function toast(msg) {
   const t = $("toast");
@@ -415,43 +567,99 @@ async function init() {
 
 function enterMain(info) {
   member = info.member;
+  APPVER = info.version || "0.0.0";
   $("member").classList.add("hidden");
   $("main").classList.remove("hidden");
-  $("who").textContent = "成员 " + info.member;
+  $("who").textContent = "成员 " + info.member + " · v" + APPVER;
   folder = info.folder;
   $("v-folder").textContent = folder || "-";
   $("c-autostart").checked = !!info.autostart;
   refresh();
   fetchPeers();
   checkConflicts();
+  checkUpdate();
+  bindDragDrop();
   clearInterval(refresh._h);
   refresh._h = setInterval(refresh, 2000);
 }
 
-document.querySelectorAll(".member-btn").forEach(b => {
-  b.addEventListener("click", async () => {
-    document.querySelectorAll(".member-btn").forEach(x => x.disabled = true);
-    try {
-      await invoke("set_member", { letter: b.dataset.m });
-      const info = await invoke("app_info");
-      switching = false;
-      $("m-cancel").classList.add("hidden");
-      enterMain(info);
-      toast("已绑定成员 " + b.dataset.m + "，同步已启动");
-    } catch (e) {
-      toast("设置失败：" + e);
-      document.querySelectorAll(".member-btn").forEach(x => x.disabled = false);
+// 拖拽文件到窗口 = 放入同步目录
+function bindDragDrop() {
+  if (dropBound || !window.__TAURI__ || !window.__TAURI__.webview) return;
+  dropBound = true;
+  window.__TAURI__.webview.onDragDropEvent(e => {
+    if (e.payload.type !== "drop") return;
+    if ($("main").classList.contains("hidden")) return;
+    invoke("import_files", { paths: e.payload.paths }).then(n => {
+      if (n > 0) { toast("已放入同步目录 " + n + " 项"); setTimeout(refresh, 500); }
+    }).catch(err => toast("导入失败：" + err));
+  }).catch(() => {});
+}
+
+function verCmp(a, b) {
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
+// 新版本检测：同一新版本只提醒一次
+async function checkUpdate() {
+  try {
+    const d = await invoke("check_update");
+    if (!d || !d.latest) return;
+    if (verCmp(d.latest, APPVER) > 0 && !localStorage.getItem("upd_" + d.latest)) {
+      localStorage.setItem("upd_" + d.latest, "1");
+      const body = "最新版本 " + d.latest + (d.notes ? "：" + d.notes : "") + "，请向管理员获取新安装包";
+      invoke("notify", { title: "LinkSync 有新版本", body }).catch(() => {});
+      toast("发现新版本 " + d.latest);
     }
-  });
+  } catch (e) {}
+}
+
+function showLoginErr(msg) {
+  const e = $("l-err");
+  e.textContent = msg;
+  e.classList.remove("hidden");
+}
+
+$("login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const u = $("l-user").value.trim(), p = $("l-pass").value;
+  if (!u || !p) { showLoginErr("请输入账号和密码"); return; }
+  const btn = $("l-btn");
+  btn.disabled = true;
+  btn.textContent = "登录中…";
+  $("l-err").classList.add("hidden");
+  try {
+    const letter = await invoke("login", { user: u, pass: p });
+    switching = false;
+    $("m-cancel").classList.add("hidden");
+    $("l-pass").value = "";
+    $("m-title").textContent = "欢迎使用 LinkSync";
+    $("m-sub").textContent = "请使用管理员分配的账号登录";
+    $("m-hint").textContent = "账号密码由管理员统一分配，忘记密码请联系管理员。";
+    const info = await invoke("app_info");
+    enterMain(info);
+    toast("已登录为成员 " + letter + "，同步已启动");
+  } catch (err) {
+    showLoginErr(String(err));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "登录并开始同步";
+  }
 });
 
 $("b-switch").addEventListener("click", () => {
   switching = true;
-  document.querySelectorAll(".member-btn").forEach(x => x.disabled = false);
-  $("m-title").textContent = "切换成员身份";
-  $("m-sub").textContent = "当前为成员 " + member + "，选择新的身份";
-  $("m-hint").textContent = "切换后同步目录与文件不变，只是换一台设备身份；请勿与他人选同一身份。";
+  $("m-title").textContent = "切换账号";
+  $("m-sub").textContent = "当前为成员 " + member + "，请用新账号登录";
+  $("m-hint").textContent = "切换后同步目录与文件不变，只是换一台设备身份；请勿使用他人账号。";
   $("m-cancel").classList.remove("hidden");
+  $("l-pass").value = "";
+  $("l-err").classList.add("hidden");
   clearInterval(refresh._h);
   $("main").classList.add("hidden");
   $("member").classList.remove("hidden");
@@ -461,13 +669,51 @@ $("m-cancel").addEventListener("click", () => {
   switching = false;
   $("m-cancel").classList.add("hidden");
   $("m-title").textContent = "欢迎使用 LinkSync";
-  $("m-sub").textContent = "首次运行，请选择你的成员身份";
-  $("m-hint").textContent = "请向管理员确认自己对应的编号后再选择，每人身份互不相同，选错需联系管理员重置。";
+  $("m-sub").textContent = "请使用管理员分配的账号登录";
+  $("m-hint").textContent = "账号密码由管理员统一分配，忘记密码请联系管理员。";
   $("member").classList.add("hidden");
   $("main").classList.remove("hidden");
   refresh();
   clearInterval(refresh._h);
   refresh._h = setInterval(refresh, 2000);
+});
+
+// 自助修改密码
+function showPassErr(msg) {
+  const e = $("p-err");
+  e.textContent = msg;
+  e.classList.remove("hidden");
+}
+
+$("b-pass").addEventListener("click", () => {
+  $("p-old").value = "";
+  $("p-new").value = "";
+  $("p-new2").value = "";
+  $("p-err").classList.add("hidden");
+  $("passmask").classList.remove("hidden");
+  $("p-old").focus();
+});
+
+$("p-cancel").addEventListener("click", () => $("passmask").classList.add("hidden"));
+
+$("p-save").addEventListener("click", async () => {
+  const o = $("p-old").value, n = $("p-new").value, n2 = $("p-new2").value;
+  if (!o || !n || !n2) { showPassErr("请填写完整"); return; }
+  if (n.length < 6) { showPassErr("新密码至少 6 位"); return; }
+  if (n !== n2) { showPassErr("两次输入的新密码不一致"); return; }
+  const btn = $("p-save");
+  btn.disabled = true;
+  btn.textContent = "保存中…";
+  try {
+    await invoke("change_password", { user: member, oldpass: o, newpass: n });
+    $("passmask").classList.add("hidden");
+    toast("密码已修改，下次登录请使用新密码");
+  } catch (e) {
+    showPassErr(String(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存";
+  }
 });
 
 $("b-pause").addEventListener("click", async () => {
@@ -501,6 +747,13 @@ function renderFiles(arr) {
     meta.className = "fmeta";
     meta.textContent = it.d ? "" : fmtBytes(it.s) + " · " + it.m;
     row.appendChild(meta);
+    if (!it.d) {
+      const sb = document.createElement("button");
+      sb.className = "sharebtn";
+      sb.textContent = "分享";
+      sb.addEventListener("click", () => openShare(it.p));
+      row.appendChild(sb);
+    }
     fl.appendChild(row);
   }
 }
@@ -547,21 +800,224 @@ $("s-close").addEventListener("click", () => $("srvmask").classList.add("hidden"
 $("s-fsearch").addEventListener("input", applyFileFilter);
 $("s-frefresh").addEventListener("click", loadServerFiles);
 
-// 冲突弹窗
-$("conflict-row").addEventListener("click", () => {
+// 冲突处理弹窗
+function renderConflictModal() {
   const list = $("cf-list");
   list.innerHTML = "";
-  for (const p of conflictList) {
-    const d = document.createElement("div");
-    d.className = "cf-item";
-    d.title = p;
-    d.textContent = p;
-    list.appendChild(d);
+  if (!conflictList.length) {
+    list.innerHTML = '<span class="empty">（已无冲突文件）</span>';
+    return;
   }
+  for (const it of conflictList) {
+    const row = document.createElement("div");
+    row.className = "cf-item2";
+    const names = document.createElement("div");
+    names.className = "cf-names";
+    const o = document.createElement("div");
+    o.className = "cf-orig";
+    o.title = it.original;
+    o.textContent = it.original;
+    const c = document.createElement("div");
+    c.className = "cf-copy";
+    c.title = it.copy;
+    c.textContent = "副本：" + it.copy.split("/").pop();
+    names.appendChild(o);
+    names.appendChild(c);
+    const acts = document.createElement("div");
+    acts.className = "cf-acts";
+    for (const [a, label] of [["replace", "用副本覆盖"], ["delete", "删除副本"], ["reveal", "定位"]]) {
+      const b = document.createElement("button");
+      b.className = "act mini";
+      b.textContent = label;
+      b.addEventListener("click", async () => {
+        try {
+          await invoke("conflict_action", { action: a, copy: it.copy });
+          toast("已处理：" + it.copy.split("/").pop());
+          await checkConflicts();
+          renderConflictModal();
+        } catch (e) { toast("操作失败：" + e); }
+      });
+      acts.appendChild(b);
+    }
+    row.appendChild(names);
+    row.appendChild(acts);
+    list.appendChild(row);
+  }
+}
+$("conflict-row").addEventListener("click", () => {
+  renderConflictModal();
   $("cfmask").classList.remove("hidden");
 });
 $("cf-open").addEventListener("click", () => { if (folder) invoke("open_folder", { path: folder }); });
 $("cf-close").addEventListener("click", () => $("cfmask").classList.add("hidden"));
+
+// 文件历史弹窗
+function renderHistory() {
+  const q = $("h-search").value.trim().toLowerCase();
+  const list = $("h-list");
+  const arr = q ? histList.filter(it => it.original.toLowerCase().includes(q)) : histList;
+  list.innerHTML = "";
+  if (!arr.length) {
+    list.innerHTML = '<span class="empty">' + (histList.length ? "（无匹配结果）" : "（暂无历史版本）") + "</span>";
+    return;
+  }
+  for (const it of arr) {
+    const row = document.createElement("div");
+    row.className = "hrow";
+    const nm = document.createElement("span");
+    nm.className = "hn";
+    nm.title = it.original;
+    nm.textContent = it.original;
+    const mt = document.createElement("span");
+    mt.className = "hm";
+    mt.textContent = it.time + " · " + fmtBytes(it.size);
+    const btn = document.createElement("button");
+    btn.className = "act mini";
+    btn.textContent = "恢复";
+    btn.addEventListener("click", async () => {
+      try {
+        await invoke("history_restore", { version: it.version });
+        toast("已恢复 " + it.original.split("/").pop() + "，将自动同步");
+      } catch (e) { toast("恢复失败：" + e); }
+    });
+    row.appendChild(nm);
+    row.appendChild(mt);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+}
+async function loadHistory() {
+  $("h-list").innerHTML = '<span class="empty">加载中</span>';
+  try { histList = await invoke("history_list"); } catch (e) { histList = []; }
+  renderHistory();
+}
+$("b-history").addEventListener("click", () => {
+  $("hsmask").classList.remove("hidden");
+  loadHistory();
+});
+$("h-search").addEventListener("input", renderHistory);
+$("h-refresh").addEventListener("click", loadHistory);
+$("h-close").addEventListener("click", () => $("hsmask").classList.add("hidden"));
+
+// 同步日志弹窗
+async function loadLog() {
+  const list = $("lg-list");
+  list.innerHTML = '<span class="empty">加载中</span>';
+  let arr = [];
+  try { arr = await invoke("sync_log"); } catch (e) {}
+  list.innerHTML = "";
+  if (!arr.length) {
+    list.innerHTML = '<span class="empty">（暂无记录）</span>';
+    return;
+  }
+  for (const it of arr) {
+    const row = document.createElement("div");
+    row.className = "hrow";
+    const tag = document.createElement("span");
+    tag.className = "hd " + (it.dir === "in" ? "in" : "local");
+    tag.textContent = it.dir === "in" ? "收到" : "本地";
+    const nm = document.createElement("span");
+    nm.className = "hn";
+    nm.title = it.name;
+    nm.textContent = it.name;
+    const mt = document.createElement("span");
+    mt.className = "hm";
+    mt.textContent = it.time || "";
+    row.appendChild(tag);
+    row.appendChild(nm);
+    row.appendChild(mt);
+    list.appendChild(row);
+  }
+}
+$("b-log").addEventListener("click", () => {
+  $("lgmask").classList.remove("hidden");
+  loadLog();
+});
+$("lg-clear").addEventListener("click", async () => {
+  try { await invoke("sync_log_clear"); loadLog(); toast("日志已清空"); } catch (e) {}
+});
+$("lg-close").addEventListener("click", () => $("lgmask").classList.add("hidden"));
+
+// 分享链接弹窗
+let shPath = "", shDays = 7;
+function openShare(path) {
+  shPath = path;
+  shDays = 7;
+  $("sh-file").textContent = path;
+  $("sh-exp").textContent = "";
+  $("sh-linkrow").style.display = "none";
+  document.querySelectorAll("#shmask .days-row button").forEach(b => {
+    b.classList.toggle("sel", b.dataset.d === "7");
+  });
+  $("shmask").classList.remove("hidden");
+}
+document.querySelectorAll("#shmask .days-row button").forEach(b => {
+  b.addEventListener("click", () => {
+    shDays = parseInt(b.dataset.d, 10);
+    document.querySelectorAll("#shmask .days-row button").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel");
+  });
+});
+$("b-shgen").addEventListener("click", async () => {
+  const btn = $("b-shgen");
+  btn.disabled = true;
+  btn.textContent = "生成中…";
+  try {
+    const d = await invoke("share_link", { path: shPath, days: shDays });
+    $("sh-link").value = d.url;
+    $("sh-exp").textContent = "有效期至 " + (d.expires || "");
+    $("sh-linkrow").style.display = "flex";
+  } catch (e) {
+    toast("生成失败：" + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "生成";
+  }
+});
+$("b-shcopy").addEventListener("click", async () => {
+  const el = $("sh-link");
+  el.select();
+  try {
+    await navigator.clipboard.writeText(el.value);
+    toast("链接已复制");
+  } catch (e) {
+    try { document.execCommand("copy"); toast("链接已复制"); }
+    catch (e2) { toast("请手动复制选中的链接"); }
+  }
+});
+$("sh-close").addEventListener("click", () => $("shmask").classList.add("hidden"));
+
+// 限速设置弹窗
+$("b-rate").addEventListener("click", async () => {
+  $("rt-send").value = "";
+  $("rt-recv").value = "";
+  $("rtmask").classList.remove("hidden");
+  try {
+    const r = await invoke("get_rate_limit");
+    $("rt-send").value = r.send;
+    $("rt-recv").value = r.recv;
+  } catch (e) {
+    $("rt-send").value = 0;
+    $("rt-recv").value = 0;
+  }
+});
+$("rt-cancel").addEventListener("click", () => $("rtmask").classList.add("hidden"));
+$("rt-save").addEventListener("click", async () => {
+  const s = parseInt($("rt-send").value, 10) || 0;
+  const r = parseInt($("rt-recv").value, 10) || 0;
+  if (s < 0 || r < 0) { toast("限速数值不能为负"); return; }
+  const btn = $("rt-save");
+  btn.disabled = true;
+  try {
+    await invoke("set_rate_limit", { send: s, recv: r });
+    $("rtmask").classList.add("hidden");
+    toast(s || r ? "限速已生效：上传 " + s + " / 下载 " + r + " KB/s" : "已取消限速");
+  } catch (e) {
+    toast("设置失败：" + e);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $("b-changedir").addEventListener("click", async () => {
   try {
