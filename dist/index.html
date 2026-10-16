@@ -141,6 +141,17 @@
   #srvbox .bar > i.hi { background: var(--amber); }
   #srvbox .bar > i.full { background: var(--red); }
   #srvbox .tip { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  #srvbox .fl-title { font-size: 12.5px; font-weight: 600; margin-top: 14px; }
+  #srvbox .flist {
+    max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; margin-top: 6px;
+    font-size: 12px; line-height: 1.8; color: var(--text);
+  }
+  #srvbox .flist .fitem { display: flex; justify-content: space-between; gap: 10px; white-space: nowrap; }
+  #srvbox .flist .fitem.dir { font-weight: 600; }
+  #srvbox .flist .fitem .fname { overflow: hidden; text-overflow: ellipsis; }
+  #srvbox .flist .fitem .fmeta { color: var(--muted); font-weight: 400; flex-shrink: 0; }
+  #srvbox .flist .empty { color: var(--muted); }
   #srvbox .close-row { text-align: right; margin-top: 12px; }
 </style>
 </head>
@@ -213,6 +224,8 @@
     <div class="row"><span class="k">历史版本占用</span><span class="v" id="s-versions">-</span></div>
     <div class="row"><span class="k">统计时间</span><span class="v" id="s-updated">-</span></div>
     <div class="tip" id="s-tip">历史版本用于误删找回（保留 90 天）。磁盘剩余不足时管理员需清理。</div>
+    <div class="fl-title">服务器文件</div>
+    <div class="flist" id="s-flist"><span class="empty">加载中</span></div>
     <div class="close-row"><button class="act" id="s-close">关闭</button></div>
   </div>
 </div>
@@ -359,6 +372,33 @@ $("b-srvinfo").addEventListener("click", async () => {
   } catch (e) {
     $("s-total").textContent = "获取失败";
     $("s-used").textContent = "-";
+  }
+  const fl = $("s-flist");
+  fl.innerHTML = '<span class="empty">加载中</span>';
+  try {
+    const arr = await invoke("server_files");
+    if (!arr || !arr.length) {
+      fl.innerHTML = '<span class="empty">（暂无文件）</span>';
+    } else {
+      fl.innerHTML = "";
+      for (const it of arr) {
+        const parts = it.p.split("/");
+        const row = document.createElement("div");
+        row.className = "fitem" + (it.d ? " dir" : "");
+        row.style.paddingLeft = (parts.length - 1) * 14 + "px";
+        const nm = document.createElement("span");
+        nm.className = "fname";
+        nm.textContent = it.d ? parts[parts.length - 1] + "/" : parts[parts.length - 1];
+        row.appendChild(nm);
+        const meta = document.createElement("span");
+        meta.className = "fmeta";
+        meta.textContent = it.d ? "" : fmtBytes(it.s) + " · " + it.m;
+        row.appendChild(meta);
+        fl.appendChild(row);
+      }
+    }
+  } catch (e) {
+    fl.innerHTML = '<span class="empty">文件列表获取失败</span>';
   }
 });
 $("s-close").addEventListener("click", () => $("srvmask").classList.add("hidden"));

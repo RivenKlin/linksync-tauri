@@ -441,6 +441,7 @@ fn get_folder() -> String {
 }
 
 const SYNCINFO_URL: &str = "http://103.236.70.249:8766/syncinfo.json";
+const SYNCFILES_URL: &str = "http://103.236.70.249:8766/syncfiles.json";
 
 #[tauri::command]
 fn server_info() -> Result<Value, String> {
@@ -450,6 +451,20 @@ fn server_info() -> Result<Value, String> {
         .build();
     agent
         .get(SYNCINFO_URL)
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_json::<Value>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn server_files() -> Result<Value, String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_millis(3000))
+        .timeout_read(std::time::Duration::from_millis(8000))
+        .build();
+    agent
+        .get(SYNCFILES_URL)
         .call()
         .map_err(|e| e.to_string())?
         .into_json::<Value>()
@@ -632,7 +647,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info, set_member, status, set_paused, get_folder, set_folder,
-            pick_folder, open_folder, open_advanced, set_autostart, quit, server_info
+            pick_folder, open_folder, open_advanced, set_autostart, quit, server_info, server_files
         ])
         .setup(|app| {
             extract_payload()?;
