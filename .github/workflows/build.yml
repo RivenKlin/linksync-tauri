@@ -26,27 +26,6 @@ jobs:
           name: linksync-windows-exe
           path: LinkSync.exe
 
-  linux:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libpipewire-0.3-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - name: Install tauri CLI
-        run: npm install -g @tauri-apps/cli@^2
-      - name: Build .deb
-        run: tauri build --bundles deb
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linksync-linux-deb
-          path: src-tauri/target/release/bundle/deb/*.deb
-
   macos:
     runs-on: macos-14
     steps:
