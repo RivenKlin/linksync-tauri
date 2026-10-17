@@ -71,17 +71,35 @@ fn sessions() -> &'static Mutex<Option<Session>> {
     S.get_or_init(Default::default)
 }
 
-// 收集到的 ICE candidate（s4 信令阶段通过 8766 发给对端）
+// 收集到的 ICE candidate（全量保存，信令线程按游标取增量、定期全量重发，防信箱过期丢失）
 fn candidates_arc() -> Arc<Mutex<Vec<String>>> {
     static C: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
     Arc::clone(C.get_or_init(Default::default))
 }
 
-/// 取走并清空已收集的 ICE candidate，供信令发送
+fn cand_cursor() -> &'static std::sync::atomic::AtomicUsize {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    &N
+}
+
+fn reset_candidates() {
+    *candidates_arc().lock().unwrap() = Vec::new();
+    cand_cursor().store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 取出自上次以来新增的 ICE candidate
 pub fn take_candidates() -> Vec<String> {
     let c = candidates_arc();
-    let mut g = c.lock().unwrap();
-    std::mem::take(&mut *g)
+    let g = c.lock().unwrap();
+    let sent = cand_cursor().load(std::sync::atomic::Ordering::Relaxed).min(g.len());
+    let out = g[sent..].to_vec();
+    cand_cursor().store(g.len(), std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
+/// 本会话全部 ICE candidate（用于周期性重发）
+pub fn all_candidates() -> Vec<String> {
+    candidates_arc().lock().unwrap().clone()
 }
 
 /// 提交对端 SDP answer
@@ -129,6 +147,7 @@ pub fn start(cfg: ShareConfig) -> Result<serde_json::Value, String> {
     let mut cfg = cfg;
     cfg.clamp();
     stop();
+    reset_candidates();
     let running = Arc::new(AtomicBool::new(true));
     let (cmd_tx, cmd_rx) = channel::<SessionCmd>(8);
     let (offer_tx, offer_rx) = std::sync::mpsc::channel::<Result<String, String>>();
@@ -470,11 +489,29 @@ fn viewer_candidates_arc() -> Arc<Mutex<Vec<String>>> {
     Arc::clone(C.get_or_init(Default::default))
 }
 
-/// 取走并清空观看端已收集的 ICE candidate
+fn viewer_cand_cursor() -> &'static std::sync::atomic::AtomicUsize {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    &N
+}
+
+fn viewer_reset_candidates() {
+    *viewer_candidates_arc().lock().unwrap() = Vec::new();
+    viewer_cand_cursor().store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 取出观看端自上次以来新增的 ICE candidate
 pub fn viewer_take_candidates() -> Vec<String> {
     let c = viewer_candidates_arc();
-    let mut g = c.lock().unwrap();
-    std::mem::take(&mut *g)
+    let g = c.lock().unwrap();
+    let sent = viewer_cand_cursor().load(std::sync::atomic::Ordering::Relaxed).min(g.len());
+    let out = g[sent..].to_vec();
+    viewer_cand_cursor().store(g.len(), std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
+/// 观看会话全部 ICE candidate（用于周期性重发）
+pub fn viewer_all_candidates() -> Vec<String> {
+    viewer_candidates_arc().lock().unwrap().clone()
 }
 
 /// 提交对端（共享方）ICE candidate
@@ -633,6 +670,7 @@ impl PeerConnectionEventHandler for ViewerHandler {
 /// 观看端启动：传入对端 offer SDP，返回本端 answer（JSON）
 pub fn viewer_start(offer_sdp: String) -> Result<serde_json::Value, String> {
     viewer_stop();
+    viewer_reset_candidates();
     let running = Arc::new(AtomicBool::new(true));
     let (cmd_tx, cmd_rx) = channel::<ViewerCmd>(8);
     let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Result<String, String>>();

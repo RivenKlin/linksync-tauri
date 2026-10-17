@@ -1130,8 +1130,23 @@ $("b-share").addEventListener("click", async () => {
   renderSsTargets();
   try { ssSharing = await invoke("share_status"); } catch (e) { ssSharing = false; }
   ssSetStatusUI();
+  ssStartPoll();
   $("ssmask").classList.remove("hidden");
 });
+// 弹窗打开期间轮询后端会话状态：连接失败或对方退出时及时更新界面
+let ssTimer = null;
+function ssStartPoll() {
+  if (ssTimer) return;
+  ssTimer = setInterval(async () => {
+    let running = false;
+    try { running = await invoke("share_status"); } catch (e) {}
+    if (!running && ssSharing) {
+      ssSharing = false;
+      ssSetStatusUI();
+      toast("屏幕共享已结束");
+    }
+  }, 2000);
+}
 $("ss-res").addEventListener("change", () => localStorage.setItem("ss_res", $("ss-res").value));
 $("ss-fps").addEventListener("change", () => localStorage.setItem("ss_fps", $("ss-fps").value));
 $("b-ssstart").addEventListener("click", async () => {
@@ -1159,7 +1174,10 @@ $("b-ssstop").addEventListener("click", async () => {
   ssSetStatusUI();
   toast("已停止屏幕共享");
 });
-$("ss-close").addEventListener("click", () => $("ssmask").classList.add("hidden"));
+$("ss-close").addEventListener("click", () => {
+  $("ssmask").classList.add("hidden");
+  if (ssTimer) { clearInterval(ssTimer); ssTimer = null; }
+});
 
 // 观看共享：邀请列表 + WebCodecs 渲染
 let vsTimer = null, vTimer = null, vDecoder = null, vTs = 0;

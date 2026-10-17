@@ -1254,8 +1254,15 @@ fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, 
     // 后台信令线程：会话停止（is_running 变 false）即退出
     std::thread::spawn(move || {
         let mut since: u64 = 0;
+        let mut tick: u64 = 0;
         while screen_share::is_running() {
-            for c in screen_share::take_candidates() {
+            // 每 10 秒全量重发一次，防止对端晚到或信箱过期收不到早期 candidate
+            let cands = if tick % 10 == 0 {
+                screen_share::all_candidates()
+            } else {
+                screen_share::take_candidates()
+            };
+            for c in cands {
                 let _ = post_json(
                     SIGNAL_URL,
                     &serde_json::json!({
@@ -1294,6 +1301,7 @@ fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, 
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
+            tick += 1;
         }
         // 会话结束后通知观看方
         let _ = post_json(
@@ -1319,7 +1327,13 @@ fn share_status() -> bool {
     screen_share::is_running()
 }
 
-// 观看端：拉取信箱中的共享邀请（kind=offer），游标保证只返回新消息
+// 未接受的共享邀请缓存：轮询游标前进后邀请不会消失，接受成功或收到对方 stop 才移除
+fn pending_invites() -> &'static std::sync::Mutex<Vec<Value>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<Vec<Value>>> = std::sync::OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+// 观看端：拉取信箱中的共享邀请（kind=offer），返回全部待接受邀请
 #[tauri::command]
 fn viewer_invites() -> Result<Value, String> {
     let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
@@ -1330,7 +1344,6 @@ fn viewer_invites() -> Result<Value, String> {
         &serde_json::json!({ "user": user, "passhash": hash, "action": "poll", "since": since })
             .to_string(),
     )?;
-    let mut invites: Vec<Value> = vec![];
     let mut maxid = since;
     if let Some(msgs) = v.get("msgs").and_then(|m| m.as_array()) {
         for m in msgs {
@@ -1339,17 +1352,24 @@ fn viewer_invites() -> Result<Value, String> {
                 maxid = id;
             }
             let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+            let from = m.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string();
+            let mut p = pending_invites().lock().unwrap();
             if kind == "offer" {
-                invites.push(serde_json::json!({
-                    "from": m.get("from").and_then(|f| f.as_str()).unwrap_or(""),
-                    "id": id,
-                    "sdp": m.get("data").and_then(|d| d.as_str()).unwrap_or("")
-                }));
+                if !p.iter().any(|x| x.get("id").and_then(|i| i.as_u64()) == Some(id)) {
+                    p.push(serde_json::json!({
+                        "from": from,
+                        "id": id,
+                        "sdp": m.get("data").and_then(|d| d.as_str()).unwrap_or("")
+                    }));
+                }
+            } else if kind == "stop" {
+                // 对方共享已结束，移除其所有待接受邀请
+                p.retain(|x| x.get("from").and_then(|f| f.as_str()) != Some(from.as_str()));
             }
         }
     }
     SINCE.store(maxid, std::sync::atomic::Ordering::Relaxed);
-    Ok(Value::Array(invites))
+    Ok(Value::Array(pending_invites().lock().unwrap().clone()))
 }
 
 // 观看端：接受邀请。answer 写回邀请方信箱，后台线程 trickle candidate 并轮询
@@ -1384,11 +1404,22 @@ fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
         screen_share::viewer_stop();
         return Err("信令服务器不可用，请稍后重试".into());
     }
+    // 接受成功，从待接受邀请缓存中移除
+    pending_invites().lock().unwrap().retain(|x| {
+        x.get("id").and_then(|i| i.as_u64()) != Some(id)
+    });
     std::thread::spawn(move || {
         // 以邀请消息 id 为起点，只收其后产生的 candidate
         let mut since: u64 = id;
+        let mut tick: u64 = 0;
         while screen_share::viewer_is_running() {
-            for c in screen_share::viewer_take_candidates() {
+            // 每 10 秒全量重发一次，防止对方早期 candidate 因信箱过期丢失
+            let cands = if tick % 10 == 0 {
+                screen_share::viewer_all_candidates()
+            } else {
+                screen_share::viewer_take_candidates()
+            };
+            for c in cands {
                 let _ = post_json(
                     SIGNAL_URL,
                     &serde_json::json!({
@@ -1428,6 +1459,7 @@ fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
+            tick += 1;
         }
     });
     Ok(answer)
