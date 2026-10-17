@@ -1252,10 +1252,23 @@ fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, 
         return Err("信令服务器不可用，请稍后重试".into());
     }
     // 后台信令线程：会话停止（is_running 变 false）即退出
+    let offer_sdp = sdp;
     std::thread::spawn(move || {
         let mut since: u64 = 0;
         let mut tick: u64 = 0;
+        let mut accepted = false;
         while screen_share::is_running() {
+            // 未接受前每 30 秒重发 offer，防止信箱 5 分钟过期后邀请消失
+            if !accepted && tick % 30 == 0 {
+                let _ = post_json(
+                    SIGNAL_URL,
+                    &serde_json::json!({
+                        "user": user, "passhash": hash, "action": "send",
+                        "to": target, "kind": "offer", "data": offer_sdp
+                    })
+                    .to_string(),
+                );
+            }
             // 每 10 秒全量重发一次，防止对端晚到或信箱过期收不到早期 candidate
             let cands = if tick % 10 == 0 {
                 screen_share::all_candidates()
@@ -1290,6 +1303,7 @@ fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, 
                         let data = m.get("data").and_then(|d| d.as_str()).unwrap_or("");
                         match kind {
                             "answer" => {
+                                accepted = true;
                                 let _ = screen_share::submit_answer(data.to_string());
                             }
                             "candidate" => {
@@ -1333,6 +1347,12 @@ fn pending_invites() -> &'static std::sync::Mutex<Vec<Value>> {
     P.get_or_init(Default::default)
 }
 
+// 当前正在观看的成员：用于忽略该成员持续重发的 offer，避免观看中仍显示邀请
+fn watching_from() -> &'static std::sync::Mutex<Option<String>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
 // 观看端：拉取信箱中的共享邀请（kind=offer），返回全部待接受邀请
 #[tauri::command]
 fn viewer_invites() -> Result<Value, String> {
@@ -1344,6 +1364,9 @@ fn viewer_invites() -> Result<Value, String> {
         &serde_json::json!({ "user": user, "passhash": hash, "action": "poll", "since": since })
             .to_string(),
     )?;
+    if !screen_share::viewer_is_running() {
+        *watching_from().lock().unwrap() = None;
+    }
     let mut maxid = since;
     if let Some(msgs) = v.get("msgs").and_then(|m| m.as_array()) {
         for m in msgs {
@@ -1355,7 +1378,11 @@ fn viewer_invites() -> Result<Value, String> {
             let from = m.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string();
             let mut p = pending_invites().lock().unwrap();
             if kind == "offer" {
-                if !p.iter().any(|x| x.get("id").and_then(|i| i.as_u64()) == Some(id)) {
+                // 共享方会持续重发 offer：按来源覆盖旧条目，保留最新 id；
+                // 正在观看该成员时忽略，避免观看中仍显示邀请
+                let watching = watching_from().lock().unwrap().clone();
+                if watching.as_deref() != Some(from.as_str()) {
+                    p.retain(|x| x.get("from").and_then(|f| f.as_str()) != Some(from.as_str()));
                     p.push(serde_json::json!({
                         "from": from,
                         "id": id,
@@ -1404,10 +1431,11 @@ fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
         screen_share::viewer_stop();
         return Err("信令服务器不可用，请稍后重试".into());
     }
-    // 接受成功，从待接受邀请缓存中移除
+    // 接受成功，从待接受邀请缓存中移除，并标记正在观看该成员
     pending_invites().lock().unwrap().retain(|x| {
         x.get("id").and_then(|i| i.as_u64()) != Some(id)
     });
+    *watching_from().lock().unwrap() = Some(from.clone());
     std::thread::spawn(move || {
         // 以邀请消息 id 为起点，只收其后产生的 candidate
         let mut since: u64 = id;
