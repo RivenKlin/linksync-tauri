@@ -17,6 +17,15 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 sha2 = "0.10"
 rfd = "0.15"
 tauri-plugin-notification = "2"
+xcap = { version = "0.9.8", features = ["image"] }
+openh264 = "0.9.9"
+webrtc = "0.21.1"
+rtc = "0.21.1"
+bytes = "1"
+base64 = "0.22"
+async-trait = "0.1"
+futures = "0.3"
+image = { version = "0.25.10", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"

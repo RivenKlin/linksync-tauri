@@ -1,5 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod screen_share;
+
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read, Write as _};
@@ -946,6 +948,7 @@ const VERSION_URL: &str = "http://103.236.70.249:8766/version.json";
 const LOGIN_URL: &str = "http://103.236.70.249:8766/login.php";
 const PASSWD_URL: &str = "http://103.236.70.249:8766/passwd.php";
 const SHARE_URL: &str = "http://103.236.70.249:8766/share.php";
+const SIGNAL_URL: &str = "http://103.236.70.249:8766/signal.php";
 
 fn sha256_hex(s: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -1212,6 +1215,244 @@ fn set_autostart(on: bool) -> Result<(), String> {
     autostart_set(on)
 }
 
+// 屏幕共享：启动（信令走 8766 信箱轮询）与停止。
+// target 为对端成员字母（A-D）；本端 offer 写入对方信箱，后台线程逐条 trickle
+// 本端 ICE candidate 并轮询自己信箱，收到 answer/candidate 即提交给 WebRTC 会话。
+#[tauri::command]
+fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, String> {
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    let target = target.trim().to_uppercase();
+    if target.len() != 1 || !target.as_bytes()[0].is_ascii_alphabetic() {
+        return Err("目标成员无效".into());
+    }
+    // 清空自己信箱，避免收到上一场会话的残留消息
+    let _ = post_json(
+        SIGNAL_URL,
+        &serde_json::json!({ "user": user, "passhash": hash, "action": "reset" }).to_string(),
+    );
+    let offer = screen_share::start(cfg)?;
+    let sdp = offer.get("sdp").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if sdp.is_empty() {
+        screen_share::stop();
+        return Err("offer 为空".into());
+    }
+    let send_ok = match post_json(
+        SIGNAL_URL,
+        &serde_json::json!({
+            "user": user, "passhash": hash, "action": "send",
+            "to": target, "kind": "offer", "data": sdp
+        })
+        .to_string(),
+    ) {
+        Ok(v) => v.get("ok").and_then(|b| b.as_bool()) == Some(true),
+        Err(_) => false,
+    };
+    if !send_ok {
+        screen_share::stop();
+        return Err("信令服务器不可用，请稍后重试".into());
+    }
+    // 后台信令线程：会话停止（is_running 变 false）即退出
+    std::thread::spawn(move || {
+        let mut since: u64 = 0;
+        while screen_share::is_running() {
+            for c in screen_share::take_candidates() {
+                let _ = post_json(
+                    SIGNAL_URL,
+                    &serde_json::json!({
+                        "user": user, "passhash": hash, "action": "send",
+                        "to": target, "kind": "candidate", "data": c
+                    })
+                    .to_string(),
+                );
+            }
+            if let Ok(v) = post_json(
+                SIGNAL_URL,
+                &serde_json::json!({
+                    "user": user, "passhash": hash, "action": "poll", "since": since
+                })
+                .to_string(),
+            ) {
+                if let Some(msgs) = v.get("msgs").and_then(|m| m.as_array()) {
+                    for m in msgs {
+                        if let Some(id) = m.get("id").and_then(|i| i.as_u64()) {
+                            if id > since {
+                                since = id;
+                            }
+                        }
+                        let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                        let data = m.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                        match kind {
+                            "answer" => {
+                                let _ = screen_share::submit_answer(data.to_string());
+                            }
+                            "candidate" => {
+                                let _ = screen_share::submit_candidate(data.to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        // 会话结束后通知观看方
+        let _ = post_json(
+            SIGNAL_URL,
+            &serde_json::json!({
+                "user": user, "passhash": hash, "action": "send",
+                "to": target, "kind": "stop", "data": ""
+            })
+            .to_string(),
+        );
+    });
+    Ok(offer)
+}
+
+#[tauri::command]
+fn share_stop() {
+    screen_share::stop();
+}
+
+// 屏幕共享是否在运行（前端打开弹窗时恢复按钮状态）
+#[tauri::command]
+fn share_status() -> bool {
+    screen_share::is_running()
+}
+
+// 观看端：拉取信箱中的共享邀请（kind=offer），游标保证只返回新消息
+#[tauri::command]
+fn viewer_invites() -> Result<Value, String> {
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    static SINCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let since = SINCE.load(std::sync::atomic::Ordering::Relaxed);
+    let v = post_json(
+        SIGNAL_URL,
+        &serde_json::json!({ "user": user, "passhash": hash, "action": "poll", "since": since })
+            .to_string(),
+    )?;
+    let mut invites: Vec<Value> = vec![];
+    let mut maxid = since;
+    if let Some(msgs) = v.get("msgs").and_then(|m| m.as_array()) {
+        for m in msgs {
+            let id = m.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+            if id > maxid {
+                maxid = id;
+            }
+            let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+            if kind == "offer" {
+                invites.push(serde_json::json!({
+                    "from": m.get("from").and_then(|f| f.as_str()).unwrap_or(""),
+                    "id": id,
+                    "sdp": m.get("data").and_then(|d| d.as_str()).unwrap_or("")
+                }));
+            }
+        }
+    }
+    SINCE.store(maxid, std::sync::atomic::Ordering::Relaxed);
+    Ok(Value::Array(invites))
+}
+
+// 观看端：接受邀请。answer 写回邀请方信箱，后台线程 trickle candidate 并轮询
+#[tauri::command]
+fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    let from = from.trim().to_uppercase();
+    if from.len() != 1 || !from.as_bytes()[0].is_ascii_alphabetic() {
+        return Err("来源成员无效".into());
+    }
+    if sdp.is_empty() {
+        return Err("offer 为空".into());
+    }
+    let answer = screen_share::viewer_start(sdp)?;
+    let sdp_out = answer.get("sdp").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if sdp_out.is_empty() {
+        screen_share::viewer_stop();
+        return Err("answer 为空".into());
+    }
+    let send_ok = match post_json(
+        SIGNAL_URL,
+        &serde_json::json!({
+            "user": user, "passhash": hash, "action": "send",
+            "to": from, "kind": "answer", "data": sdp_out
+        })
+        .to_string(),
+    ) {
+        Ok(v) => v.get("ok").and_then(|b| b.as_bool()) == Some(true),
+        Err(_) => false,
+    };
+    if !send_ok {
+        screen_share::viewer_stop();
+        return Err("信令服务器不可用，请稍后重试".into());
+    }
+    std::thread::spawn(move || {
+        // 以邀请消息 id 为起点，只收其后产生的 candidate
+        let mut since: u64 = id;
+        while screen_share::viewer_is_running() {
+            for c in screen_share::viewer_take_candidates() {
+                let _ = post_json(
+                    SIGNAL_URL,
+                    &serde_json::json!({
+                        "user": user, "passhash": hash, "action": "send",
+                        "to": from, "kind": "candidate", "data": c
+                    })
+                    .to_string(),
+                );
+            }
+            if let Ok(v) = post_json(
+                SIGNAL_URL,
+                &serde_json::json!({
+                    "user": user, "passhash": hash, "action": "poll", "since": since
+                })
+                .to_string(),
+            ) {
+                if let Some(msgs) = v.get("msgs").and_then(|m| m.as_array()) {
+                    for m in msgs {
+                        if let Some(mid) = m.get("id").and_then(|i| i.as_u64()) {
+                            if mid > since {
+                                since = mid;
+                            }
+                        }
+                        let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                        let data = m.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                        match kind {
+                            "candidate" => {
+                                let _ = screen_share::viewer_submit_candidate(data.to_string());
+                            }
+                            "stop" => {
+                                screen_share::viewer_stop();
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    });
+    Ok(answer)
+}
+
+// 观看会话是否在运行（前端据此自动关闭观看画面）
+#[tauri::command]
+fn viewer_status() -> bool {
+    screen_share::viewer_is_running()
+}
+
+// 观看端：取走已重组的视频帧（base64 Annex-B + 关键帧标记）
+#[tauri::command]
+fn viewer_frames() -> Vec<Value> {
+    screen_share::frames_base64(screen_share::viewer_take_frames())
+        .into_iter()
+        .map(|(b, k)| serde_json::json!({ "b": b, "k": k }))
+        .collect()
+}
+
+#[tauri::command]
+fn viewer_stop_share() {
+    screen_share::viewer_stop();
+}
+
 #[cfg(target_os = "macos")]
 fn autostart_file() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -1420,7 +1661,8 @@ fn main() {
             pick_folder, open_folder, open_advanced, set_autostart, quit, server_info, server_files,
             server_peers, conflicts, conflict_action, notify,
             import_files, history_list, history_restore, sync_log, sync_log_clear, check_update,
-            share_link, get_rate_limit, set_rate_limit
+            share_link, get_rate_limit, set_rate_limit, share_start, share_stop, share_status,
+            viewer_invites, viewer_start, viewer_status, viewer_frames, viewer_stop_share
         ])
         .setup(|app| {
             extract_payload()?;

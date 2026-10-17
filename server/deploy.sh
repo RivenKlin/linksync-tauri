@@ -26,6 +26,8 @@ cp /tmp/dl.php /var/www/image-ai/dl.php
 chmod 644 /var/www/image-ai/dl.php
 cp /tmp/admin.php /var/www/image-ai/admin.php
 chmod 644 /var/www/image-ai/admin.php
+cp /tmp/signal.php /var/www/image-ai/signal.php
+chmod 644 /var/www/image-ai/signal.php
 mkdir -p /etc/linksync
 chown root:www-data /etc/linksync
 chmod 770 /etc/linksync
@@ -36,6 +38,10 @@ chmod 660 /etc/linksync/accounts.json
 touch /etc/linksync/logins.jsonl /etc/linksync/shares.json
 chown www-data:www-data /etc/linksync/logins.jsonl /etc/linksync/shares.json
 chmod 640 /etc/linksync/logins.jsonl /etc/linksync/shares.json
+# 屏幕共享信令信箱（成员 A-D，.seq 由 PHP 自动创建）
+touch /etc/linksync/signal_A.jsonl /etc/linksync/signal_B.jsonl /etc/linksync/signal_C.jsonl /etc/linksync/signal_D.jsonl
+chown www-data:www-data /etc/linksync/signal_A.jsonl /etc/linksync/signal_B.jsonl /etc/linksync/signal_C.jsonl /etc/linksync/signal_D.jsonl
+chmod 640 /etc/linksync/signal_A.jsonl /etc/linksync/signal_B.jsonl /etc/linksync/signal_C.jsonl /etc/linksync/signal_D.jsonl
 
 # 手机上传：www-data 可写同步目录 + PHP 上传限制
 usermod -aG syncthing www-data

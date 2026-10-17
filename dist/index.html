@@ -251,12 +251,36 @@
   .maskbox .frow label { font-size: 12px; color: var(--muted); }
   .maskbox .frow input { padding: 9px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); outline: none; }
   .maskbox .frow input:focus { border-color: var(--accent); }
+  .maskbox .frow select { padding: 9px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); outline: none; }
+  .maskbox .frow select:focus { border-color: var(--accent); }
   .days-row { display: flex; gap: 8px; margin: 10px 0 4px; }
   .days-row button { flex: 1; padding: 8px 0; border: 1px solid var(--border); background: #fff; border-radius: 8px; font-size: 12.5px; cursor: pointer; color: var(--text); }
   .days-row button.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .linkrow { display: flex; gap: 6px; margin-top: 10px; }
   .linkrow input { flex: 1; min-width: 0; font-size: 11.5px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: #f7f7f8; color: var(--text); }
   .linkrow button { flex: none; }
+
+  /* ---------- 观看共享 ---------- */
+  #voverlay {
+    position: fixed; inset: 0; background: #16181d; z-index: 30;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #vcanvas { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  #vbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; background: rgba(22,24,29,.75);
+  }
+  #vbar #vinfo { color: #cfd2d8; font-size: 12.5px; }
+  #vsmask .invite {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12.5px;
+  }
+  #vsmask .invite:last-child { border-bottom: none; }
+  #vsmask .invite button {
+    padding: 5px 12px; border: 1px solid var(--accent); background: var(--accent);
+    color: #fff; border-radius: 7px; font-size: 12px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -313,6 +337,8 @@
     <button class="act" id="b-history">文件历史</button>
     <button class="act" id="b-log">同步日志</button>
     <button class="act" id="b-rate">限速</button>
+    <button class="act" id="b-share">屏幕共享</button>
+    <button class="act" id="b-view">观看共享</button>
     <button class="act" id="b-pass">修改密码</button>
     <button class="act" id="b-switch">切换身份</button>
   </div>
@@ -419,6 +445,58 @@
       <button class="act" id="rt-cancel">取消</button>
       <button class="act primary" id="rt-save">保存</button>
     </div>
+  </div>
+</div>
+
+<div id="ssmask" class="mask hidden">
+  <div class="maskbox" style="width:340px">
+    <h2>屏幕共享</h2>
+    <div class="m-tip">将本机屏幕实时共享给指定成员，由服务器中转建立点对点连接。开始后关闭本窗口不会中断共享。</div>
+    <div class="frow"><label>共享给</label>
+      <div class="days-row" id="ss-targets"></div>
+    </div>
+    <div class="frow"><label>分辨率</label>
+      <select id="ss-res">
+        <option value="640x360">640 x 360（省流量）</option>
+        <option value="1024x576">1024 x 576</option>
+        <option value="1280x720">1280 x 720（推荐）</option>
+        <option value="1920x1080">1920 x 1080（高清）</option>
+      </select>
+    </div>
+    <div class="frow"><label>帧率</label>
+      <select id="ss-fps">
+        <option value="5">5 帧/秒（省流量）</option>
+        <option value="10">10 帧/秒</option>
+        <option value="15">15 帧/秒（推荐）</option>
+        <option value="30">30 帧/秒（流畅）</option>
+      </select>
+    </div>
+    <div class="m-tip" id="ss-status"></div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="act" id="ss-close">关闭</button>
+      <button class="act primary" id="b-ssstart">开始共享</button>
+      <button class="act warn hidden" id="b-ssstop">停止共享</button>
+    </div>
+  </div>
+</div>
+
+<div id="vsmask" class="mask hidden">
+  <div class="maskbox" style="width:340px">
+    <h2>观看共享</h2>
+    <div class="m-tip">队友发起的屏幕共享邀请会出现在这里，点击接受后全屏观看。</div>
+    <div class="hlist" id="vs-list"><span class="empty">加载中</span></div>
+    <div class="close-row" style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="act" id="vs-refresh">刷新</button>
+      <button class="act" id="vs-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="voverlay" class="hidden">
+  <canvas id="vcanvas"></canvas>
+  <div id="vbar">
+    <span id="vinfo">正在建立连接</span>
+    <button class="act" id="v-stop">结束观看</button>
   </div>
 </div>
 
@@ -1017,6 +1095,240 @@ $("rt-save").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// 屏幕共享弹窗
+let ssTarget = null, ssSharing = false;
+function renderSsTargets() {
+  const box = $("ss-targets");
+  box.innerHTML = "";
+  for (const L of ["A", "B", "C", "D"]) {
+    if (L === member) continue;
+    const b = document.createElement("button");
+    b.textContent = "成员 " + L;
+    if (L === ssTarget) b.classList.add("sel");
+    b.addEventListener("click", () => {
+      ssTarget = L;
+      localStorage.setItem("ss_target", L);
+      renderSsTargets();
+    });
+    box.appendChild(b);
+  }
+}
+function ssSetStatusUI() {
+  $("b-ssstart").classList.toggle("hidden", ssSharing);
+  $("b-ssstop").classList.toggle("hidden", !ssSharing);
+  $("ss-status").textContent = ssSharing
+    ? "共享进行中" + (ssTarget ? "，目标成员 " + ssTarget : "") + "，等待对方接入。"
+    : "";
+}
+$("b-share").addEventListener("click", async () => {
+  $("ss-res").value = localStorage.getItem("ss_res") || "1280x720";
+  $("ss-fps").value = localStorage.getItem("ss_fps") || "15";
+  ssTarget = localStorage.getItem("ss_target") || null;
+  if (ssTarget === member) ssTarget = null;
+  renderSsTargets();
+  try { ssSharing = await invoke("share_status"); } catch (e) { ssSharing = false; }
+  ssSetStatusUI();
+  $("ssmask").classList.remove("hidden");
+});
+$("ss-res").addEventListener("change", () => localStorage.setItem("ss_res", $("ss-res").value));
+$("ss-fps").addEventListener("change", () => localStorage.setItem("ss_fps", $("ss-fps").value));
+$("b-ssstart").addEventListener("click", async () => {
+  if (!ssTarget) { toast("请先选择共享目标成员"); return; }
+  const wh = $("ss-res").value.split("x");
+  const cfg = { width: parseInt(wh[0], 10), height: parseInt(wh[1], 10), fps: parseInt($("ss-fps").value, 10) };
+  const btn = $("b-ssstart");
+  btn.disabled = true;
+  btn.textContent = "启动中…";
+  try {
+    await invoke("share_start", { target: ssTarget, cfg });
+    ssSharing = true;
+    ssSetStatusUI();
+    toast("屏幕共享已开始，已向成员 " + ssTarget + " 发出邀请");
+  } catch (e) {
+    toast("启动失败：" + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "开始共享";
+  }
+});
+$("b-ssstop").addEventListener("click", async () => {
+  try { await invoke("share_stop"); } catch (e) {}
+  ssSharing = false;
+  ssSetStatusUI();
+  toast("已停止屏幕共享");
+});
+$("ss-close").addEventListener("click", () => $("ssmask").classList.add("hidden"));
+
+// 观看共享：邀请列表 + WebCodecs 渲染
+let vsTimer = null, vTimer = null, vDecoder = null, vTs = 0;
+
+function splitNals(u8) {
+  const pos = [];
+  for (let i = 0; i + 4 <= u8.length; i++) {
+    if (u8[i] === 0 && u8[i + 1] === 0 && u8[i + 2] === 0 && u8[i + 3] === 1) {
+      pos.push(i + 4);
+      i += 3;
+    }
+  }
+  const nals = [];
+  for (let k = 0; k < pos.length; k++) {
+    const s = pos[k];
+    const e = k + 1 < pos.length ? pos[k + 1] - 4 : u8.length;
+    if (e > s) nals.push(u8.subarray(s, e));
+  }
+  return nals;
+}
+
+function buildAvcC(sps, pps) {
+  const buf = new Uint8Array(11 + sps.length + pps.length);
+  let i = 0;
+  buf[i++] = 1;
+  buf[i++] = sps[1]; buf[i++] = sps[2]; buf[i++] = sps[3];
+  buf[i++] = 0xFF;
+  buf[i++] = 0xE1;
+  buf[i++] = sps.length >> 8; buf[i++] = sps.length & 0xFF;
+  buf.set(sps, i); i += sps.length;
+  buf[i++] = 1;
+  buf[i++] = pps.length >> 8; buf[i++] = pps.length & 0xFF;
+  buf.set(pps, i);
+  return buf;
+}
+
+function toAvcc(nals) {
+  let total = 0;
+  for (const n of nals) total += 4 + n.length;
+  const out = new Uint8Array(total);
+  let i = 0;
+  for (const n of nals) {
+    out[i++] = n.length >>> 24;
+    out[i++] = (n.length >>> 16) & 0xFF;
+    out[i++] = (n.length >>> 8) & 0xFF;
+    out[i++] = n.length & 0xFF;
+    out.set(n, i); i += n.length;
+  }
+  return out;
+}
+
+async function refreshInvites() {
+  const box = $("vs-list");
+  try {
+    const list = await invoke("viewer_invites");
+    if (!list.length) {
+      box.innerHTML = '<span class="empty">暂无邀请，等待队友发起共享</span>';
+      return;
+    }
+    box.innerHTML = "";
+    for (const it of list) {
+      const row = document.createElement("div");
+      row.className = "invite";
+      const name = document.createElement("span");
+      name.textContent = "成员 " + it.from + " 的屏幕共享";
+      const btn = document.createElement("button");
+      btn.textContent = "接受";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await invoke("viewer_start", { from: it.from, id: it.id, sdp: it.sdp });
+          $("vsmask").classList.add("hidden");
+          if (vsTimer) { clearInterval(vsTimer); vsTimer = null; }
+          openViewer(it.from);
+        } catch (e) {
+          btn.disabled = false;
+          toast("接受失败：" + e);
+        }
+      });
+      row.appendChild(name);
+      row.appendChild(btn);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = '<span class="empty">获取邀请失败，请稍后重试</span>';
+  }
+}
+
+function openViewer(from) {
+  vTs = 0;
+  let got = false, configured = false;
+  $("vinfo").textContent = "正在连接成员 " + from + " 的屏幕共享";
+  $("voverlay").classList.remove("hidden");
+  const canvas = $("vcanvas");
+  const ctx = canvas.getContext("2d");
+  vDecoder = new VideoDecoder({
+    output: (frame) => {
+      if (!got) {
+        got = true;
+        $("vinfo").textContent = "正在观看成员 " + from + " 的屏幕共享";
+      }
+      if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+        canvas.width = frame.displayWidth;
+        canvas.height = frame.displayHeight;
+      }
+      ctx.drawImage(frame, 0, 0);
+      frame.close();
+    },
+    error: (e) => { toast("解码错误：" + e.message); }
+  });
+  vTimer = setInterval(async () => {
+    let running;
+    try { running = await invoke("viewer_status"); } catch (e) { return; }
+    if (!running) {
+      closeViewer();
+      toast("对方已结束共享");
+      return;
+    }
+    let frames;
+    try { frames = await invoke("viewer_frames"); } catch (e) { return; }
+    if (!frames.length) return;
+    for (const fr of frames) {
+      const bin = Uint8Array.from(atob(fr.b), (c) => c.charCodeAt(0));
+      const nals = splitNals(bin);
+      if (!configured) {
+        const sps = nals.find((n) => (n[0] & 0x1F) === 7);
+        const pps = nals.find((n) => (n[0] & 0x1F) === 8);
+        if (!sps || !pps) continue;
+        const desc = buildAvcC(sps, pps);
+        const codecStr = "avc1." + [sps[1], sps[2], sps[3]]
+          .map((x) => x.toString(16).padStart(2, "0")).join("");
+        try {
+          vDecoder.configure({ codec: codecStr, description: desc, optimizeForLatency: true });
+          configured = true;
+        } catch (e) {
+          toast("解码器配置失败：" + e.message);
+          return;
+        }
+      }
+      if (!configured) continue;
+      const data = toAvcc(nals);
+      try {
+        vDecoder.decode(new EncodedVideoChunk({ type: fr.k ? "key" : "delta", timestamp: vTs, data }));
+      } catch (e) { return; }
+      vTs += 66667;
+    }
+  }, 100);
+}
+
+function closeViewer() {
+  $("voverlay").classList.add("hidden");
+  if (vTimer) { clearInterval(vTimer); vTimer = null; }
+  if (vDecoder) { try { vDecoder.close(); } catch (e) {} vDecoder = null; }
+}
+
+$("b-view").addEventListener("click", () => {
+  $("vsmask").classList.remove("hidden");
+  refreshInvites();
+  if (vsTimer) clearInterval(vsTimer);
+  vsTimer = setInterval(refreshInvites, 3000);
+});
+$("vs-refresh").addEventListener("click", refreshInvites);
+$("vs-close").addEventListener("click", () => {
+  $("vsmask").classList.add("hidden");
+  if (vsTimer) { clearInterval(vsTimer); vsTimer = null; }
+});
+$("v-stop").addEventListener("click", async () => {
+  closeViewer();
+  try { await invoke("viewer_stop_share"); } catch (e) {}
 });
 
 $("b-changedir").addEventListener("click", async () => {
