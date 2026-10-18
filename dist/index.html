@@ -1187,6 +1187,7 @@ let vsTimer = null, vTimer = null, vDecoder = null, vTs = 0;
 let vsnapTimer = null, vsnapDelay = null, vSnapMiss = 0;
 let vRelayTimer = null, vRelaySince = 0, vRelayEmpty = 0;
 let vGot = false, vConfigured = false;
+let vWsActive = false, vWsUnlisten = null, vWsLast = 0, vRelayBusy = false;
 
 function stopSnap() {
   if (vsnapTimer) { clearInterval(vsnapTimer); vsnapTimer = null; }
@@ -1196,9 +1197,18 @@ function stopSnap() {
   $("vcanvas").classList.remove("hidden");
 }
 
+function stopWsRelay() {
+  if (vWsActive) {
+    vWsActive = false;
+    try { invoke("relay_watch_stop"); } catch (e) {}
+  }
+}
+
 function exitRelayMode() {
   if (vRelayTimer) { clearInterval(vRelayTimer); vRelayTimer = null; }
   vRelayEmpty = 0;
+  vRelayBusy = false;
+  stopWsRelay();
 }
 
 // 把帧列表（{b:base64 AU, k:是否关键帧}）喂给解码器
@@ -1250,13 +1260,47 @@ async function relayTick(from) {
   }
 }
 
-function enterRelayMode(from) {
-  if (vRelayTimer) return;
+// HTTP 轮询拉帧（WebSocket 不可用时的中继兜底）
+function startPollRelay(from) {
+  if (vRelayTimer) { clearInterval(vRelayTimer); vRelayTimer = null; }
   vRelaySince = 0;
   vRelayEmpty = 0;
-  $("vinfo").textContent = "实时连接未建立，中继模式（30fps）· 成员 " + from;
   vRelayTimer = setInterval(() => relayTick(from), 200);
   relayTick(from);
+}
+
+// 优先走 WebSocket 实时推流：Rust 后台收帧经 relay-frame 事件逐帧喂解码器
+async function tryWsRelay(from) {
+  try {
+    if (!vWsUnlisten) {
+      vWsUnlisten = await listen("relay-frame", (e) => {
+        if (vGot || !vWsActive) return;
+        vWsLast = Date.now();
+        feedFrames([e.payload]);
+      });
+    }
+    await invoke("relay_watch", { target: from });
+    vWsActive = true;
+    vWsLast = Date.now();
+    // 看门狗：5 秒无帧视为推流中断，退回 HTTP 轮询
+    vRelayTimer = setInterval(() => {
+      if (vGot) { exitRelayMode(); return; }
+      if (Date.now() - vWsLast > 5000) {
+        stopWsRelay();
+        startPollRelay(from);
+      }
+    }, 1000);
+  } catch (e) {
+    vWsActive = false;
+    startPollRelay(from);
+  }
+}
+
+function enterRelayMode(from) {
+  if (vRelayTimer || vRelayBusy) return;
+  vRelayBusy = true;
+  $("vinfo").textContent = "实时连接未建立，中继模式（30fps）· 成员 " + from;
+  tryWsRelay(from);
 }
 
 async function snapTick(from) {
@@ -1428,6 +1472,7 @@ function closeViewer() {
   if (vTimer) { clearInterval(vTimer); vTimer = null; }
   if (vDecoder) { try { vDecoder.close(); } catch (e) {} vDecoder = null; }
   stopSnap();
+  exitRelayMode();
 }
 
 $("b-view").addEventListener("click", () => {

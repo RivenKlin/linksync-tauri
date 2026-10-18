@@ -951,6 +951,72 @@ const SHARE_URL: &str = "http://103.236.70.249:8766/share.php";
 const SIGNAL_URL: &str = "http://103.236.70.249:8766/signal.php";
 const TSNAP_URL: &str = "http://103.236.70.249:8766/tsnap.php";
 const RELAY_URL: &str = "http://103.236.70.249:8766/lsrelay/";
+const RELAY_WS_URL: &str = "ws://103.236.70.249:8766/lsrelay-ws/";
+
+// 中继 WebSocket 连接：先建立 TCP（自设超时，便于后续读写非阻塞控制），再握手鉴权。
+// action 为 "push"（共享端）或 "watch"（观看端，需 target）；成功返回已鉴权的连接。
+fn relay_ws_connect(
+    user: &str,
+    hash: &str,
+    action: &str,
+    target: Option<&str>,
+) -> Result<tungstenite::WebSocket<std::net::TcpStream>, String> {
+    use tungstenite::{client, Message};
+    let stream = std::net::TcpStream::connect_timeout(
+        &"103.236.70.249:8766".parse().map_err(|_| "地址无效".to_string())?,
+        std::time::Duration::from_millis(4000),
+    )
+    .map_err(|_| "无法连接中继服务器".to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(8)))
+        .ok();
+    let (mut ws, _) = client(RELAY_WS_URL, stream).map_err(|_| "WebSocket 握手失败".to_string())?;
+    let mut msg = serde_json::json!({ "user": user, "passhash": hash, "action": action });
+    if let Some(t) = target {
+        msg["target"] = serde_json::json!(t);
+    }
+    ws.send(Message::Text(msg.to_string()))
+        .map_err(|_| "发送鉴权失败".to_string())?;
+    let reply = match ws.read() {
+        Ok(Message::Text(t)) => t,
+        _ => return Err("中继无响应".to_string()),
+    };
+    let v: Value = serde_json::from_str(&reply).map_err(|_| "中继响应异常".to_string())?;
+    if v.get("ok").and_then(|b| b.as_bool()) == Some(true) {
+        Ok(ws)
+    } else {
+        Err("中继鉴权失败".to_string())
+    }
+}
+
+// 推送一帧并顺带处理服务器 ping/close：读超时设为 1ms，仅排空已到达的控制帧。
+fn relay_ws_push(
+    ws: &mut tungstenite::WebSocket<std::net::TcpStream>,
+    au_b64: &str,
+    key: bool,
+) -> Result<(), String> {
+    use tungstenite::Message;
+    let _ = ws
+        .get_mut()
+        .set_read_timeout(Some(std::time::Duration::from_millis(1)));
+    loop {
+        match ws.read() {
+            Ok(Message::Close(_)) => return Err("中继已关闭".to_string()),
+            Ok(_) => continue,
+            Err(tungstenite::Error::Io(e))
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break
+            }
+            Err(_) => return Err("中继连接异常".to_string()),
+        }
+    }
+    let body = serde_json::json!({ "au": au_b64, "key": key }).to_string();
+    ws.send(Message::Text(body)).map_err(|_| "推帧失败")?;
+    ws.flush().ok();
+    Ok(())
+}
 
 fn sha256_hex(s: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -1419,7 +1485,8 @@ fn snap_push_loop(user: String, hash: String) {
 // 服务器中继（relay.py 内存环形缓冲），观看端每 200ms 拉取自上次以来的新帧，
 // 复用同一 WebCodecs 解码管线。全程 TCP，无需 UDP 打洞与 TURN。
 
-// 中继推流循环：WebRTC 未连通期间按 fps 出帧；连通后暂停（由 WebRTC 直传）
+// 中继推流循环：WebRTC 未连通期间按 fps 出帧；连通后暂停（由 WebRTC 直传）。
+// 优先走 WebSocket 实时推流（低延迟），连接失败或中断时退回 HTTP 逐帧 POST。
 fn relay_push_loop(user: String, hash: String, fps: u64) {
     let fps = fps.clamp(1, 30) as u64;
     let mut enc = match openh264::encoder::Encoder::new() {
@@ -1427,6 +1494,7 @@ fn relay_push_loop(user: String, hash: String, fps: u64) {
         Err(_) => return,
     };
     enc.force_intra_frame();
+    let mut ws = relay_ws_connect(&user, &hash, "push", None).ok();
     let w = SNAP_W as usize;
     let h = SNAP_H as usize;
     let y_size = w * h;
@@ -1478,14 +1546,25 @@ fn relay_push_loop(user: String, hash: String, fps: u64) {
             if !bytes.is_empty() {
                 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
                 let key = screen_share::au_is_key(&bytes);
-                let _ = post_json(
-                    RELAY_URL,
-                    &serde_json::json!({
-                        "user": user, "passhash": hash, "action": "push",
-                        "au": B64.encode(&bytes), "key": key
-                    })
-                    .to_string(),
-                );
+                let b64 = B64.encode(&bytes);
+                let mut sent = false;
+                if let Some(w) = ws.as_mut() {
+                    if relay_ws_push(w, &b64, key).is_ok() {
+                        sent = true;
+                    } else {
+                        ws = None; // 连接中断，本会话退回 HTTP 轮询推流
+                    }
+                }
+                if !sent {
+                    let _ = post_json(
+                        RELAY_URL,
+                        &serde_json::json!({
+                            "user": user, "passhash": hash, "action": "push",
+                            "au": b64, "key": key
+                        })
+                        .to_string(),
+                    );
+                }
             }
         }
         let elapsed = t0.elapsed().as_millis() as u64;
@@ -1493,6 +1572,71 @@ fn relay_push_loop(user: String, hash: String, fps: u64) {
             std::thread::sleep(std::time::Duration::from_millis(frame_ms - elapsed));
         }
     }
+}
+
+// 观看端 WebSocket 订阅：连接成功后由后台线程持续收帧，经 "relay-frame" 事件
+// 逐帧喂给前端解码；连接/鉴权失败则命令返回 Err，前端据此退回 HTTP 轮询模式。
+fn relay_watch_stop_flag() -> &'static std::sync::atomic::AtomicBool {
+    static F: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    &F
+}
+
+#[tauri::command]
+fn relay_watch(app: AppHandle, target: String) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    let target = target.trim().to_uppercase();
+    if target.len() != 1 || !target.as_bytes()[0].is_ascii_alphabetic() {
+        return Err("目标成员无效".into());
+    }
+    relay_watch_stop_flag().store(true, Ordering::SeqCst); // 结束上一路订阅
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    relay_watch_stop_flag().store(false, Ordering::SeqCst);
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    std::thread::spawn(move || {
+        let mut ws = match relay_ws_connect(&user, &hash, "watch", Some(&target)) {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = tx.send(Err(e));
+                return;
+            }
+        };
+        let _ = tx.send(Ok(()));
+        use tungstenite::Message;
+        let _ = ws
+            .get_mut()
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)));
+        loop {
+            if relay_watch_stop_flag().load(Ordering::SeqCst) {
+                break;
+            }
+            match ws.read() {
+                Ok(Message::Text(t)) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                        if v.get("b").is_some() {
+                            let _ = app.emit("relay-frame", v);
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => break,
+                Ok(_) => continue,
+                Err(tungstenite::Error::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue;
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(8))
+        .map_err(|_| "中继连接超时")?
+}
+
+#[tauri::command]
+fn relay_watch_stop() {
+    relay_watch_stop_flag().store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 // 观看端：拉取自 since 序列以来的中继视频帧，返回 {ok, frames:[{b,k}], max, t}
@@ -1918,7 +2062,7 @@ fn main() {
             import_files, history_list, history_restore, sync_log, sync_log_clear, check_update,
             share_link, get_rate_limit, set_rate_limit, share_start, share_stop, share_status,
             viewer_invites, viewer_start, viewer_status, viewer_frames, viewer_stop_share,
-            snap_pull, viewer_remote_stop, relay_pull
+            snap_pull, viewer_remote_stop, relay_pull, relay_watch, relay_watch_stop
         ])
         .setup(|app| {
             extract_payload()?;
