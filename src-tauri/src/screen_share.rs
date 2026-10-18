@@ -263,7 +263,7 @@ async fn run_session(
 
     let config = RTCConfigurationBuilder::new()
         .with_ice_servers(vec![RTCIceServer {
-            urls: vec!["stun:39.172.137.182:41789".to_string()],
+            urls: vec!["stun:103.236.70.249:41789".to_string()],
             ..Default::default()
         }])
         .build();
@@ -736,7 +736,7 @@ async fn run_viewer(
 
     let config = RTCConfigurationBuilder::new()
         .with_ice_servers(vec![RTCIceServer {
-            urls: vec!["stun:39.172.137.182:41789".to_string()],
+            urls: vec!["stun:103.236.70.249:41789".to_string()],
             ..Default::default()
         }])
         .build();
@@ -849,6 +849,101 @@ mod tests {
     use super::*;
     use rtc::rtp::codec::h264::H264Payloader;
     use rtc::rtp::packetizer::Payloader;
+
+    struct ProbeHandler {
+        candidates: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PeerConnectionEventHandler for ProbeHandler {
+        async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+            if let Ok(init) = event.candidate.to_json() {
+                self.candidates.lock().unwrap().push(init.candidate);
+            }
+        }
+    }
+
+    /// 在线探针：验证自建 STUN 服务能否让 webrtc 采集到 srflx 候选（需公网可达）
+    #[test]
+    #[ignore = "需要访问公网 STUN 服务"]
+    fn stun_srflx_probe() {
+        let rt = default_runtime().expect("runtime");
+        let cands: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let cands2 = Arc::clone(&cands);
+        let rt2 = Arc::clone(&rt);
+        let rt3 = Arc::clone(&rt);
+        let cands3 = Arc::clone(&cands);
+        rt.block_on(Box::pin(async move {
+            let mut me = MediaEngine::default();
+            me.register_codec(
+                RTCRtpCodecParameters {
+                    rtp_codec: RTCRtpCodec {
+                        mime_type: "video/H264".to_owned(),
+                        clock_rate: 90000,
+                        channels: 0,
+                        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+                            .to_owned(),
+                        rtcp_feedback: vec![],
+                    },
+                    payload_type: 102,
+                    ..Default::default()
+                },
+                RtpCodecKind::Video,
+            )
+            .expect("register codec");
+            let registry = register_default_interceptors(Registry::new(), &mut me).expect("interceptors");
+            let config = RTCConfigurationBuilder::new()
+                .with_ice_servers(vec![RTCIceServer {
+                    urls: vec!["stun:103.236.70.249:41789".to_string()],
+                    ..Default::default()
+                }])
+                .build();
+            let handler = Arc::new(ProbeHandler { candidates: cands2 });
+            let pc = PeerConnectionBuilder::new()
+                .with_configuration(config)
+                .with_media_engine(me)
+                .with_interceptor_registry(registry)
+                .with_handler(handler)
+                .with_runtime(rt2)
+                .with_udp_addrs(vec!["0.0.0.0:0".to_string()])
+                .build()
+                .await
+                .expect("build pc");
+            let track = Arc::new(
+                TrackLocalStaticSample::new(
+                    Instant::now(),
+                    MediaStreamTrack::new(
+                        "probe-stream".to_string(),
+                        "probe-track".to_string(),
+                        "probe".to_string(),
+                        RtpCodecKind::Video,
+                        vec![],
+                    ),
+                )
+                .expect("track"),
+            );
+            pc.add_track(track as Arc<dyn TrackLocal>).await.expect("add track");
+            let offer = pc.create_offer(None).await.expect("create offer");
+            pc.set_local_description(offer).await.expect("set local desc");
+            // 保持 pc 存活并等待采集完成（最长 20 秒）
+            for _ in 0..20 {
+                rt3.sleep(Duration::from_secs(1)).await;
+                if cands3.lock().unwrap().iter().any(|c| c.contains("srflx")) {
+                    break;
+                }
+            }
+            drop(pc);
+        }));
+        let last = cands.lock().unwrap().clone();
+        println!("gathered candidates:");
+        for c in &last {
+            println!("  {}", c);
+        }
+        assert!(
+            last.iter().any(|c| c.contains("srflx")),
+            "未采集到 srflx 候选，STUN 链路不通或响应不被接受"
+        );
+    }
 
     fn annexb(nals: &[Vec<u8>]) -> Vec<u8> {
         let mut v = Vec::new();
