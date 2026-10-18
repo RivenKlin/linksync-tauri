@@ -1243,12 +1243,12 @@ function feedFrames(frames) {
 }
 
 async function relayTick(from) {
-  if (vGot) { exitRelayMode(); return; }
   let v;
   try { v = await invoke("relay_pull", { target: from, since: vRelaySince }); } catch (e) { return; }
   if (v && v.ok && v.frames && v.frames.length) {
     vRelayEmpty = 0;
     if (typeof v.max === "number") vRelaySince = v.max;
+    vGot = false;
     feedFrames(v.frames);
   } else {
     vRelayEmpty++;

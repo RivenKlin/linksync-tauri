@@ -218,7 +218,6 @@ pub fn stop() {
 
 #[derive(Clone)]
 struct ShareHandler {
-    done_tx: Sender<()>,
     connected: Arc<AtomicBool>,
     candidates: Arc<Mutex<Vec<String>>>,
 }
@@ -239,11 +238,13 @@ impl PeerConnectionEventHandler for ShareHandler {
                 share_connected_flag().store(true, Ordering::SeqCst);
                 self.connected.store(true, Ordering::SeqCst);
             }
-            RTCPeerConnectionState::Failed
-            | RTCPeerConnectionState::Disconnected
-            | RTCPeerConnectionState::Closed => {
+            RTCPeerConnectionState::Failed | RTCPeerConnectionState::Disconnected => {
                 share_connected_flag().store(false, Ordering::SeqCst);
-                let _ = self.done_tx.try_send(());
+                self.connected.store(false, Ordering::SeqCst);
+            }
+            RTCPeerConnectionState::Closed => {
+                share_connected_flag().store(false, Ordering::SeqCst);
+                self.connected.store(false, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -283,10 +284,8 @@ async fn run_session(
         }])
         .build();
 
-    let (done_tx, mut done_rx) = channel::<()>(1);
     let connected = Arc::new(AtomicBool::new(false));
     let handler = Arc::new(ShareHandler {
-        done_tx,
         connected: Arc::clone(&connected),
         candidates: candidates_arc(),
     });
@@ -380,7 +379,6 @@ async fn run_session(
                     Some(SessionCmd::Stop) | None => break,
                 }
             }
-            _ = done_rx.recv().fuse() => break,
         }
         if !running.load(Ordering::SeqCst) {
             break;
@@ -427,7 +425,11 @@ async fn stream_loop(
     let mut yuv: Vec<u8> = Vec::new();
     let mut next_tick = Instant::now();
 
-    while running.load(Ordering::SeqCst) && connected.load(Ordering::SeqCst) {
+    while running.load(Ordering::SeqCst) {
+        if !connected.load(Ordering::SeqCst) {
+            rt.sleep(Duration::from_millis(100)).await;
+            continue;
+        }
         // 捕获+编码放在独立作用域：Monitor 不是 Send，必须在 await 前释放
         let bytes = {
             let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
@@ -861,7 +863,11 @@ async fn run_viewer(
                     Some(ViewerCmd::Stop) | None => break,
                 }
             }
-            _ = done_rx.recv().fuse() => break,
+            _ = done_rx.recv().fuse() => {
+                if !running.load(Ordering::SeqCst) {
+                    break;
+                }
+            },
         }
         if !running.load(Ordering::SeqCst) {
             break;
