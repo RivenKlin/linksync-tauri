@@ -266,6 +266,7 @@
     display: flex; align-items: center; justify-content: center;
   }
   #vcanvas { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  #vsnap { max-width: 100%; max-height: 100%; width: auto; height: auto; }
   #vbar {
     position: fixed; top: 0; left: 0; right: 0;
     display: flex; align-items: center; justify-content: space-between;
@@ -494,6 +495,7 @@
 
 <div id="voverlay" class="hidden">
   <canvas id="vcanvas"></canvas>
+  <img id="vsnap" class="hidden" alt="" />
   <div id="vbar">
     <span id="vinfo">正在建立连接</span>
     <button class="act" id="v-stop">结束观看</button>
@@ -1181,6 +1183,111 @@ $("ss-close").addEventListener("click", () => {
 
 // 观看共享：邀请列表 + WebCodecs 渲染
 let vsTimer = null, vTimer = null, vDecoder = null, vTs = 0;
+// 降级链：WebRTC -> TCP 视频中继（30fps）-> TCP 快照（约1.5秒/帧）
+let vsnapTimer = null, vsnapDelay = null, vSnapMiss = 0;
+let vRelayTimer = null, vRelaySince = 0, vRelayEmpty = 0;
+let vGot = false, vConfigured = false;
+
+function stopSnap() {
+  if (vsnapTimer) { clearInterval(vsnapTimer); vsnapTimer = null; }
+  if (vsnapDelay) { clearTimeout(vsnapDelay); vsnapDelay = null; }
+  vSnapMiss = 0;
+  $("vsnap").classList.add("hidden");
+  $("vcanvas").classList.remove("hidden");
+}
+
+function exitRelayMode() {
+  if (vRelayTimer) { clearInterval(vRelayTimer); vRelayTimer = null; }
+  vRelayEmpty = 0;
+}
+
+// 把帧列表（{b:base64 AU, k:是否关键帧}）喂给解码器
+function feedFrames(frames) {
+  if (!vDecoder) return;
+  for (const fr of frames) {
+    const bin = Uint8Array.from(atob(fr.b), (c) => c.charCodeAt(0));
+    const nals = splitNals(bin);
+    if (!vConfigured) {
+      const sps = nals.find((n) => (n[0] & 0x1F) === 7);
+      const pps = nals.find((n) => (n[0] & 0x1F) === 8);
+      if (!sps || !pps) continue;
+      const desc = buildAvcC(sps, pps);
+      const codecStr = "avc1." + [sps[1], sps[2], sps[3]]
+        .map((x) => x.toString(16).padStart(2, "0")).join("");
+      try {
+        vDecoder.configure({ codec: codecStr, description: desc, optimizeForLatency: true });
+        vConfigured = true;
+      } catch (e) {
+        toast("解码器配置失败：" + e.message);
+        return;
+      }
+    }
+    if (!vConfigured) continue;
+    const data = toAvcc(nals);
+    try {
+      vDecoder.decode(new EncodedVideoChunk({ type: fr.k ? "key" : "delta", timestamp: vTs, data }));
+    } catch (e) { return; }
+    vTs += 33333;
+  }
+}
+
+async function relayTick(from) {
+  if (vGot) { exitRelayMode(); return; }
+  let v;
+  try { v = await invoke("relay_pull", { target: from, since: vRelaySince }); } catch (e) { return; }
+  if (v && v.ok && v.frames && v.frames.length) {
+    vRelayEmpty = 0;
+    if (typeof v.max === "number") vRelaySince = v.max;
+    feedFrames(v.frames);
+  } else {
+    vRelayEmpty++;
+    if (v && typeof v.max === "number") vRelaySince = v.max;
+    if (vRelayEmpty >= 50) {
+      // 中继 10 秒无帧：共享端中继推流未运行或已结束，转快照兜底
+      exitRelayMode();
+      enterSnapMode(from);
+    }
+  }
+}
+
+function enterRelayMode(from) {
+  if (vRelayTimer) return;
+  vRelaySince = 0;
+  vRelayEmpty = 0;
+  $("vinfo").textContent = "实时连接未建立，中继模式（30fps）· 成员 " + from;
+  vRelayTimer = setInterval(() => relayTick(from), 200);
+  relayTick(from);
+}
+
+async function snapTick(from) {
+  try {
+    const v = await invoke("snap_pull", { target: from });
+    if (v && v.ok && v.img) {
+      vSnapMiss = 0;
+      const img = $("vsnap");
+      img.src = "data:image/jpeg;base64," + v.img;
+      if (img.classList.contains("hidden")) {
+        img.classList.remove("hidden");
+        $("vcanvas").classList.add("hidden");
+        $("vinfo").textContent = "实时连接未建立，快照模式（约1.5秒刷新）· 成员 " + from;
+      }
+    } else {
+      // 服务器返回无快照：共享端已退出（帧超过30秒未更新）
+      vSnapMiss++;
+      if (vSnapMiss >= 4) {
+        closeViewer();
+        toast("对方已结束共享");
+      }
+    }
+  } catch (e) {}
+}
+
+function enterSnapMode(from) {
+  if (vsnapTimer) return;
+  exitRelayMode();
+  vsnapTimer = setInterval(() => snapTick(from), 2000);
+  snapTick(from);
+}
 
 function splitNals(u8) {
   const pos = [];
@@ -1268,15 +1375,20 @@ async function refreshInvites() {
 
 function openViewer(from) {
   vTs = 0;
-  let got = false, configured = false;
+  vGot = false;
+  vConfigured = false;
+  stopSnap();
+  exitRelayMode();
   $("vinfo").textContent = "正在连接成员 " + from + " 的屏幕共享";
   $("voverlay").classList.remove("hidden");
   const canvas = $("vcanvas");
   const ctx = canvas.getContext("2d");
   vDecoder = new VideoDecoder({
     output: (frame) => {
-      if (!got) {
-        got = true;
+      if (!vGot) {
+        vGot = true;
+        stopSnap();
+        exitRelayMode();
         $("vinfo").textContent = "正在观看成员 " + from + " 的屏幕共享";
       }
       if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
@@ -1288,42 +1400,26 @@ function openViewer(from) {
     },
     error: (e) => { toast("解码错误：" + e.message); }
   });
+  // 6 秒内 WebRTC 未出帧：进入 TCP 视频中继模式（30fps）
+  vsnapDelay = setTimeout(() => { if (!vGot) enterRelayMode(from); }, 6000);
   vTimer = setInterval(async () => {
     let running;
     try { running = await invoke("viewer_status"); } catch (e) { return; }
     if (!running) {
-      closeViewer();
-      toast("对方已结束共享");
+      // 会话已结束：对方主动停止则关闭；连接失败（如打洞失败）则转中继兜底
+      let rs = false;
+      try { rs = await invoke("viewer_remote_stop"); } catch (e) {}
+      if (rs) {
+        if (!vsnapTimer && !vRelayTimer) { closeViewer(); toast("对方已结束共享"); }
+        return;
+      }
+      enterRelayMode(from);
       return;
     }
     let frames;
     try { frames = await invoke("viewer_frames"); } catch (e) { return; }
     if (!frames.length) return;
-    for (const fr of frames) {
-      const bin = Uint8Array.from(atob(fr.b), (c) => c.charCodeAt(0));
-      const nals = splitNals(bin);
-      if (!configured) {
-        const sps = nals.find((n) => (n[0] & 0x1F) === 7);
-        const pps = nals.find((n) => (n[0] & 0x1F) === 8);
-        if (!sps || !pps) continue;
-        const desc = buildAvcC(sps, pps);
-        const codecStr = "avc1." + [sps[1], sps[2], sps[3]]
-          .map((x) => x.toString(16).padStart(2, "0")).join("");
-        try {
-          vDecoder.configure({ codec: codecStr, description: desc, optimizeForLatency: true });
-          configured = true;
-        } catch (e) {
-          toast("解码器配置失败：" + e.message);
-          return;
-        }
-      }
-      if (!configured) continue;
-      const data = toAvcc(nals);
-      try {
-        vDecoder.decode(new EncodedVideoChunk({ type: fr.k ? "key" : "delta", timestamp: vTs, data }));
-      } catch (e) { return; }
-      vTs += 66667;
-    }
+    feedFrames(frames);
   }, 100);
 }
 
@@ -1331,6 +1427,7 @@ function closeViewer() {
   $("voverlay").classList.add("hidden");
   if (vTimer) { clearInterval(vTimer); vTimer = null; }
   if (vDecoder) { try { vDecoder.close(); } catch (e) {} vDecoder = null; }
+  stopSnap();
 }
 
 $("b-view").addEventListener("click", () => {

@@ -122,8 +122,18 @@ pub fn is_running() -> bool {
     g.as_ref().map(|s| s.running.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
+// 共享会话 WebRTC 是否已连通：TCP 中继推流据此决定是否需要兜底出帧
+fn share_connected_flag() -> &'static AtomicBool {
+    static C: AtomicBool = AtomicBool::new(false);
+    &C
+}
+
+pub fn is_connected() -> bool {
+    share_connected_flag().load(Ordering::SeqCst)
+}
+
 // RGBA -> I420（BT.601 限定范围），输出写入 buf（w*h*3/2）
-fn rgba_to_i420(src: &[u8], w: usize, h: usize, buf: &mut Vec<u8>) {
+pub(crate) fn rgba_to_i420(src: &[u8], w: usize, h: usize, buf: &mut Vec<u8>) {
     buf.resize(w * h * 3 / 2, 0);
     let (y_plane, rest) = buf.split_at_mut(w * h);
     let (u_plane, v_plane) = rest.split_at_mut(w * h / 4);
@@ -148,6 +158,7 @@ pub fn start(cfg: ShareConfig) -> Result<serde_json::Value, String> {
     cfg.clamp();
     stop();
     reset_candidates();
+    share_connected_flag().store(false, Ordering::SeqCst);
     let running = Arc::new(AtomicBool::new(true));
     let (cmd_tx, cmd_rx) = channel::<SessionCmd>(8);
     let (offer_tx, offer_rx) = std::sync::mpsc::channel::<Result<String, String>>();
@@ -216,18 +227,22 @@ struct ShareHandler {
 impl PeerConnectionEventHandler for ShareHandler {
     async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
         if let Ok(init) = event.candidate.to_json() {
+            eprintln!("share ICE candidate: {}", init.candidate);
             self.candidates.lock().unwrap().push(init.candidate);
         }
     }
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        eprintln!("share PC state: {:?}", state);
         match state {
             RTCPeerConnectionState::Connected => {
+                share_connected_flag().store(true, Ordering::SeqCst);
                 self.connected.store(true, Ordering::SeqCst);
             }
             RTCPeerConnectionState::Failed
             | RTCPeerConnectionState::Disconnected
             | RTCPeerConnectionState::Closed => {
+                share_connected_flag().store(false, Ordering::SeqCst);
                 let _ = self.done_tx.try_send(());
             }
             _ => {}
@@ -539,6 +554,20 @@ pub fn viewer_is_running() -> bool {
     g.as_ref().map(|s| s.running.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
+// 观看会话结束原因标记：true=收到对方 stop（主动结束），false=连接失败等
+fn viewer_remote_stopped_flag() -> &'static AtomicBool {
+    static R: AtomicBool = AtomicBool::new(false);
+    &R
+}
+
+pub fn viewer_mark_remote_stopped() {
+    viewer_remote_stopped_flag().store(true, Ordering::SeqCst);
+}
+
+pub fn viewer_remote_stopped() -> bool {
+    viewer_remote_stopped_flag().load(Ordering::SeqCst)
+}
+
 /// 停止观看会话
 pub fn viewer_stop() {
     let session = viewer_sessions().lock().unwrap().take();
@@ -619,7 +648,7 @@ fn depacketize(payload: &[u8], cur: &mut Vec<u8>, fu: &mut Vec<u8>, fu_open: &mu
 }
 
 /// 帧内是否含 IDR(5) 或 SPS(7)，据此标记关键帧
-fn au_is_key(annexb: &[u8]) -> bool {
+pub(crate) fn au_is_key(annexb: &[u8]) -> bool {
     let mut i = 0usize;
     while i + 4 < annexb.len() {
         if annexb[i] == 0 && annexb[i + 1] == 0 && annexb[i + 2] == 0 && annexb[i + 3] == 1 {
@@ -646,11 +675,13 @@ struct ViewerHandler {
 impl PeerConnectionEventHandler for ViewerHandler {
     async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
         if let Ok(init) = event.candidate.to_json() {
+            eprintln!("viewer ICE candidate: {}", init.candidate);
             self.candidates.lock().unwrap().push(init.candidate);
         }
     }
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        eprintln!("viewer PC state: {:?}", state);
         match state {
             RTCPeerConnectionState::Connected => {}
             RTCPeerConnectionState::Failed
@@ -671,6 +702,7 @@ impl PeerConnectionEventHandler for ViewerHandler {
 pub fn viewer_start(offer_sdp: String) -> Result<serde_json::Value, String> {
     viewer_stop();
     viewer_reset_candidates();
+    viewer_remote_stopped_flag().store(false, Ordering::SeqCst);
     let running = Arc::new(AtomicBool::new(true));
     let (cmd_tx, cmd_rx) = channel::<ViewerCmd>(8);
     let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Result<String, String>>();

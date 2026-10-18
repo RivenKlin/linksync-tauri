@@ -949,6 +949,8 @@ const LOGIN_URL: &str = "http://103.236.70.249:8766/login.php";
 const PASSWD_URL: &str = "http://103.236.70.249:8766/passwd.php";
 const SHARE_URL: &str = "http://103.236.70.249:8766/share.php";
 const SIGNAL_URL: &str = "http://103.236.70.249:8766/signal.php";
+const TSNAP_URL: &str = "http://103.236.70.249:8766/tsnap.php";
+const RELAY_URL: &str = "http://103.236.70.249:8766/lsrelay/";
 
 fn sha256_hex(s: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -1251,6 +1253,19 @@ fn share_start(target: String, cfg: screen_share::ShareConfig) -> Result<Value, 
         screen_share::stop();
         return Err("信令服务器不可用，请稍后重试".into());
     }
+    // TCP 快照兜底：共享期间独立线程每 1.5 秒推一帧最新画面，与 WebRTC 是否连通无关
+    {
+        let u2 = user.clone();
+        let h2 = hash.clone();
+        std::thread::spawn(move || snap_push_loop(u2, h2));
+    }
+    // TCP 视频中继：WebRTC 未连通期间按设定帧率（上限 30fps）推 H264 帧
+    {
+        let u3 = user.clone();
+        let h3 = hash.clone();
+        let fps = cfg.fps as u64;
+        std::thread::spawn(move || relay_push_loop(u3, h3, fps));
+    }
     // 后台信令线程：会话停止（is_running 变 false）即退出
     let offer_sdp = sdp;
     std::thread::spawn(move || {
@@ -1339,6 +1354,179 @@ fn share_stop() {
 #[tauri::command]
 fn share_status() -> bool {
     screen_share::is_running()
+}
+
+// ==================== TCP 快照兜底 ====================
+// WebRTC 打洞失败（对称 NAT 等）时的降级通道：共享端持续把最新画面压成
+// JPEG 推到服务器单槽文件，观看端轮询拉取显示。与 WebRTC 会话状态完全解耦。
+
+const SNAP_W: u32 = 1280;
+const SNAP_H: u32 = 720;
+
+// 捕获主显示器 -> 1280x720 JPEG（质量 60）-> base64
+fn snap_capture_jpeg_b64() -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let monitors = xcap::Monitor::all().ok()?;
+    let monitor = monitors
+        .iter()
+        .find(|m| m.is_primary().unwrap_or(false))
+        .or_else(|| monitors.first())?;
+    let img = monitor.capture_image().ok()?;
+    let rgb: image::RgbImage = if img.width() == SNAP_W && img.height() == SNAP_H {
+        let dyn_img: image::DynamicImage = img.into();
+        dyn_img.to_rgb8()
+    } else {
+        let scaled =
+            image::imageops::resize(&img, SNAP_W, SNAP_H, image::imageops::FilterType::Triangle);
+        let dyn_img: image::DynamicImage = scaled.into();
+        dyn_img.to_rgb8()
+    };
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 60)
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .ok()?;
+    Some(B64.encode(&buf))
+}
+
+// 共享期间的快照推流循环：约 1.5 秒一帧，共享会话停止即退出
+fn snap_push_loop(user: String, hash: String) {
+    while screen_share::is_running() {
+        let t0 = Instant::now();
+        if let Some(img) = snap_capture_jpeg_b64() {
+            let _ = post_json(
+                TSNAP_URL,
+                &serde_json::json!({
+                    "user": user, "passhash": hash, "action": "push", "img": img
+                })
+                .to_string(),
+            );
+        }
+        let dur = std::time::Duration::from_millis(1500);
+        let elapsed = t0.elapsed();
+        if elapsed < dur {
+            std::thread::sleep(dur - elapsed);
+        }
+    }
+}
+
+// ==================== TCP 视频中继（30fps 兜底通道） ====================
+// WebRTC 打洞失败时，共享端把 openh264 编码的 H264 帧经 8766 端口逐帧 POST 到
+// 服务器中继（relay.py 内存环形缓冲），观看端每 200ms 拉取自上次以来的新帧，
+// 复用同一 WebCodecs 解码管线。全程 TCP，无需 UDP 打洞与 TURN。
+
+// 中继推流循环：WebRTC 未连通期间按 fps 出帧；连通后暂停（由 WebRTC 直传）
+fn relay_push_loop(user: String, hash: String, fps: u64) {
+    let fps = fps.clamp(1, 30) as u64;
+    let mut enc = match openh264::encoder::Encoder::new() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    enc.force_intra_frame();
+    let w = SNAP_W as usize;
+    let h = SNAP_H as usize;
+    let y_size = w * h;
+    let c_size = (w / 2) * (h / 2);
+    let mut yuv: Vec<u8> = Vec::new();
+    let frame_ms = 1000 / fps;
+    let mut n: u64 = 0;
+    loop {
+        if !screen_share::is_running() {
+            break;
+        }
+        if screen_share::is_connected() {
+            // WebRTC 已连通，直传更优；等待其断开后再接管
+            n = 0;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            continue;
+        }
+        let t0 = Instant::now();
+        if n % 60 == 0 {
+            enc.force_intra_frame(); // 每约 2 秒强制关键帧，便于观看端随时入流
+        }
+        n += 1;
+        let au = (|| -> Option<Vec<u8>> {
+            let monitors = xcap::Monitor::all().ok()?;
+            let monitor = monitors
+                .iter()
+                .find(|m| m.is_primary().unwrap_or(false))
+                .or_else(|| monitors.first())?;
+            let img = monitor.capture_image().ok()?;
+            let scaled = if img.width() == SNAP_W && img.height() == SNAP_H {
+                img
+            } else {
+                image::imageops::resize(
+                    &img,
+                    SNAP_W,
+                    SNAP_H,
+                    image::imageops::FilterType::Triangle,
+                )
+            };
+            screen_share::rgba_to_i420(scaled.as_raw(), w, h, &mut yuv);
+            let frame = openh264::formats::YUVSlices::new(
+                (&yuv[..y_size], &yuv[y_size..y_size + c_size], &yuv[y_size + c_size..]),
+                (w, h),
+                (w, w / 2, w / 2),
+            );
+            Some(enc.encode(&frame).ok()?.to_vec())
+        })();
+        if let Some(bytes) = au {
+            if !bytes.is_empty() {
+                use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+                let key = screen_share::au_is_key(&bytes);
+                let _ = post_json(
+                    RELAY_URL,
+                    &serde_json::json!({
+                        "user": user, "passhash": hash, "action": "push",
+                        "au": B64.encode(&bytes), "key": key
+                    })
+                    .to_string(),
+                );
+            }
+        }
+        let elapsed = t0.elapsed().as_millis() as u64;
+        if elapsed < frame_ms {
+            std::thread::sleep(std::time::Duration::from_millis(frame_ms - elapsed));
+        }
+    }
+}
+
+// 观看端：拉取自 since 序列以来的中继视频帧，返回 {ok, frames:[{b,k}], max, t}
+#[tauri::command]
+fn relay_pull(target: String, since: u64) -> Result<Value, String> {
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    let target = target.trim().to_uppercase();
+    if target.len() != 1 || !target.as_bytes()[0].is_ascii_alphabetic() {
+        return Err("目标成员无效".into());
+    }
+    post_json(
+        RELAY_URL,
+        &serde_json::json!({
+            "user": user, "passhash": hash, "action": "pull", "target": target, "since": since
+        })
+        .to_string(),
+    )
+}
+
+// 观看端：拉取共享方最新快照帧，返回 {ok, img, t} 或 {ok:false, error}
+#[tauri::command]
+fn snap_pull(target: String) -> Result<Value, String> {
+    let (user, hash) = read_cred().ok_or("请先登录后再使用屏幕共享")?;
+    let target = target.trim().to_uppercase();
+    if target.len() != 1 || !target.as_bytes()[0].is_ascii_alphabetic() {
+        return Err("目标成员无效".into());
+    }
+    post_json(
+        TSNAP_URL,
+        &serde_json::json!({
+            "user": user, "passhash": hash, "action": "pull", "target": target
+        })
+        .to_string(),
+    )
 }
 
 // 未接受的共享邀请缓存：轮询游标前进后邀请不会消失，接受成功或收到对方 stop 才移除
@@ -1478,6 +1666,7 @@ fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
                                 let _ = screen_share::viewer_submit_candidate(data.to_string());
                             }
                             "stop" => {
+                                screen_share::viewer_mark_remote_stopped();
                                 screen_share::viewer_stop();
                                 break;
                             }
@@ -1497,6 +1686,12 @@ fn viewer_start(from: String, id: u64, sdp: String) -> Result<Value, String> {
 #[tauri::command]
 fn viewer_status() -> bool {
     screen_share::viewer_is_running()
+}
+
+// 观看会话是否因"对方主动结束"而停止（区别于连接失败，连接失败时前端转快照兜底）
+#[tauri::command]
+fn viewer_remote_stop() -> bool {
+    screen_share::viewer_remote_stopped()
 }
 
 // 观看端：取走已重组的视频帧（base64 Annex-B + 关键帧标记）
@@ -1722,7 +1917,8 @@ fn main() {
             server_peers, conflicts, conflict_action, notify,
             import_files, history_list, history_restore, sync_log, sync_log_clear, check_update,
             share_link, get_rate_limit, set_rate_limit, share_start, share_stop, share_status,
-            viewer_invites, viewer_start, viewer_status, viewer_frames, viewer_stop_share
+            viewer_invites, viewer_start, viewer_status, viewer_frames, viewer_stop_share,
+            snap_pull, viewer_remote_stop, relay_pull
         ])
         .setup(|app| {
             extract_payload()?;
