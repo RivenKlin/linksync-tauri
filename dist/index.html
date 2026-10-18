@@ -1188,6 +1188,7 @@ let vsnapTimer = null, vsnapDelay = null, vSnapMiss = 0;
 let vRelayTimer = null, vRelaySince = 0, vRelayEmpty = 0;
 let vGot = false, vConfigured = false;
 let vWsActive = false, vWsUnlisten = null, vWsLast = 0, vRelayBusy = false;
+let vWsFrames = 0, vRelayFrom = "";
 
 function stopSnap() {
   if (vsnapTimer) { clearInterval(vsnapTimer); vsnapTimer = null; }
@@ -1272,16 +1273,23 @@ function startPollRelay(from) {
 // 优先走 WebSocket 实时推流：Rust 后台收帧经 relay-frame 事件逐帧喂解码器
 async function tryWsRelay(from) {
   try {
+    // 先置位再连接：Rust 线程鉴权成功后可能立即开始推事件，避免早期补帧被丢弃
+    vWsActive = true;
+    vWsLast = Date.now();
+    vWsFrames = 0;
     if (!vWsUnlisten) {
       vWsUnlisten = await listen("relay-frame", (e) => {
         if (vGot || !vWsActive) return;
         vWsLast = Date.now();
+        vWsFrames++;
+        if (vWsFrames % 30 === 1) {
+          $("vinfo").textContent = "中继模式（WS推流）· 成员 " + vRelayFrom
+            + " · 已收 " + vWsFrames + " 帧";
+        }
         feedFrames([e.payload]);
       });
     }
     await invoke("relay_watch", { target: from });
-    vWsActive = true;
-    vWsLast = Date.now();
     // 看门狗：5 秒无帧视为推流中断，退回 HTTP 轮询
     vRelayTimer = setInterval(() => {
       if (vGot) { exitRelayMode(); return; }
@@ -1299,6 +1307,7 @@ async function tryWsRelay(from) {
 function enterRelayMode(from) {
   if (vRelayTimer || vRelayBusy) return;
   vRelayBusy = true;
+  vRelayFrom = from;
   $("vinfo").textContent = "实时连接未建立，中继模式（30fps）· 成员 " + from;
   tryWsRelay(from);
 }

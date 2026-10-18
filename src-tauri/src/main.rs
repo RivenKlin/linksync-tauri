@@ -989,32 +989,17 @@ fn relay_ws_connect(
     }
 }
 
-// 推送一帧并顺带处理服务器 ping/close：读超时设为 1ms，仅排空已到达的控制帧。
+// 推送一帧：服务器已关闭 keepalive ping，纯发送无需读排空；
+// flush 错误必须传播（send 只进缓冲，真正写入 TCP 失败要能退回 HTTP 推流）
 fn relay_ws_push(
     ws: &mut tungstenite::WebSocket<std::net::TcpStream>,
     au_b64: &str,
     key: bool,
 ) -> Result<(), String> {
     use tungstenite::Message;
-    let _ = ws
-        .get_mut()
-        .set_read_timeout(Some(std::time::Duration::from_millis(1)));
-    loop {
-        match ws.read() {
-            Ok(Message::Close(_)) => return Err("中继已关闭".to_string()),
-            Ok(_) => continue,
-            Err(tungstenite::Error::Io(e))
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                break
-            }
-            Err(_) => return Err("中继连接异常".to_string()),
-        }
-    }
     let body = serde_json::json!({ "au": au_b64, "key": key }).to_string();
-    ws.send(Message::Text(body)).map_err(|_| "推帧失败")?;
-    ws.flush().ok();
+    ws.send(Message::Text(body)).map_err(|_| "推帧失败".to_string())?;
+    ws.flush().map_err(|_| "推帧写入失败".to_string())?;
     Ok(())
 }
 
@@ -1576,9 +1561,9 @@ fn relay_push_loop(user: String, hash: String, fps: u64) {
 
 // 观看端 WebSocket 订阅：连接成功后由后台线程持续收帧，经 "relay-frame" 事件
 // 逐帧喂给前端解码；连接/鉴权失败则命令返回 Err，前端据此退回 HTTP 轮询模式。
-fn relay_watch_stop_flag() -> &'static std::sync::atomic::AtomicBool {
-    static F: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    &F
+fn relay_watch_gen() -> &'static std::sync::atomic::AtomicU64 {
+    static G: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    &G
 }
 
 #[tauri::command]
@@ -1589,9 +1574,8 @@ fn relay_watch(app: AppHandle, target: String) -> Result<(), String> {
     if target.len() != 1 || !target.as_bytes()[0].is_ascii_alphabetic() {
         return Err("目标成员无效".into());
     }
-    relay_watch_stop_flag().store(true, Ordering::SeqCst); // 结束上一路订阅
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    relay_watch_stop_flag().store(false, Ordering::SeqCst);
+    // 代数自增：旧订阅线程发现代数不一致即自行退出，无需等待固定时长
+    let my_gen = relay_watch_gen().fetch_add(1, Ordering::SeqCst) + 1;
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     std::thread::spawn(move || {
         let mut ws = match relay_ws_connect(&user, &hash, "watch", Some(&target)) {
@@ -1607,7 +1591,7 @@ fn relay_watch(app: AppHandle, target: String) -> Result<(), String> {
             .get_mut()
             .set_read_timeout(Some(std::time::Duration::from_millis(300)));
         loop {
-            if relay_watch_stop_flag().load(Ordering::SeqCst) {
+            if relay_watch_gen().load(Ordering::SeqCst) != my_gen {
                 break;
             }
             match ws.read() {
@@ -1636,7 +1620,7 @@ fn relay_watch(app: AppHandle, target: String) -> Result<(), String> {
 
 #[tauri::command]
 fn relay_watch_stop() {
-    relay_watch_stop_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+    relay_watch_gen().fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 // 观看端：拉取自 since 序列以来的中继视频帧，返回 {ok, frames:[{b,k}], max, t}

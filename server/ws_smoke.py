@@ -43,6 +43,16 @@ async def main():
     assert msg.get("b") == au, msg
     print("frame received by watcher:", {k: (v[:20] if isinstance(v, str) else v) for k, v in msg.items()})
 
+    # 连续推 10 帧，观看端应按 seq 严格递增收到（验证补帧/实时帧无乱序）
+    for i in range(10):
+        await wa.send(json.dumps({"au": au, "key": i == 0}))
+    seqs = []
+    for _ in range(10):
+        m = json.loads(await asyncio.wait_for(wb.recv(), timeout=5))
+        seqs.append(m["seq"])
+    assert seqs == sorted(seqs) and len(set(seqs)) == 10, seqs
+    print("ordered live frames ok:", seqs)
+
     # HTTP 推流也应广播给 WS 观看端
     import urllib.request
     body = json.dumps({"user": a, "passhash": ha, "action": "push", "au": au, "key": True}).encode()

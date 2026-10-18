@@ -32,7 +32,8 @@ MAXAU = 2 * 1024 * 1024  # 单帧 AU base64 上限
 
 # member -> {"q": [(seq, b64, key, t)], "seq": int, "bytes": int}
 BUFS = {}
-# member -> [watcher websocket, ...]
+# member -> [(watcher websocket, asyncio.Queue), ...]
+# 每个观看连接一个独立发送队列：补帧与实时帧按 seq 严格串行发出，避免乱序/竞态
 WATCHERS = {}
 
 
@@ -88,30 +89,27 @@ def push_frame(me, au, key):
     return b["seq"]
 
 
-def catchup_frames(q, since=0):
-    """补发帧：从最近关键帧起（since>0 时取 seq>since 的最早关键帧），最多 30 帧。"""
+def catchup_frames(q):
+    """补发帧：从最近关键帧起直到缓冲末尾，保证观看端入流无参考缺口。"""
     if not q:
         return []
     idx = None
     for i in range(len(q) - 1, -1, -1):
-        if q[i][2] and q[i][0] > since:
+        if q[i][2]:
             idx = i
             break
     if idx is None:
         return []
-    return q[idx:idx + 30]
+    return q[idx:]
 
 
-async def broadcast(me, payload):
-    dead = []
-    for w in WATCHERS.get(me, []):
+def broadcast(me, payload):
+    """把帧投入该成员所有观看连接的发送队列（同一事件循环内，无 await，
+    与补帧快照天然无竞态）；队列满时丢帧，2 秒内的下一个关键帧即可恢复。"""
+    data = json.dumps(payload, ensure_ascii=False)
+    for _w, q in list(WATCHERS.get(me, [])):
         try:
-            await w.send(json.dumps(payload, ensure_ascii=False))
-        except Exception:
-            dead.append(w)
-    for w in dead:
-        try:
-            WATCHERS[me].remove(w)
+            q.put_nowait(data)
         except Exception:
             pass
 
@@ -125,11 +123,8 @@ def handle(body):
         seq = push_frame(me, str(body.get("au", "")), bool(body.get("key")))
         if seq is None:
             return {"ok": False, "error": "帧无效"}
-        # HTTP 推流同样实时广播给 WS 观看端（广播失败不影响推流结果）
-        try:
-            asyncio.ensure_future(broadcast(me, {"b": body.get("au", ""), "k": bool(body.get("key")), "seq": seq}))
-        except Exception:
-            pass
+        # HTTP 推流同样实时广播给 WS 观看端
+        broadcast(me, {"b": body.get("au", ""), "k": bool(body.get("key")), "seq": seq})
         return {"ok": True, "seq": seq}
     if action == "pull":
         target = str(body.get("target", "")).strip().upper()
@@ -238,7 +233,7 @@ async def ws_handler(ws, path=None):
             seq = push_frame(me, au, key)
             if seq is None:
                 continue
-            await broadcast(me, {"b": au, "k": key, "seq": seq})
+            broadcast(me, {"b": au, "k": key, "seq": seq})
     elif action == "watch":
         target = str(first.get("target", "")).strip().upper()
         if len(target) != 1 or not ("A" <= target <= "Z"):
@@ -248,17 +243,23 @@ async def ws_handler(ws, path=None):
         b = BUFS.get(target)
         await ws.send(json.dumps({"ok": True, "role": "watch",
                                   "max": b["seq"] if b else 0}))
-        # 补发存量帧（最近关键帧起），保证观看端能立即解码出画面
-        for x in catchup_frames(b["q"] if b else []):
-            await ws.send(json.dumps({"b": x[1], "k": x[2], "seq": x[0]},
-                                     ensure_ascii=False))
-        WATCHERS.setdefault(target, []).append(ws)
+        q = asyncio.Queue(maxsize=120)
+        # 先取存量快照再注册：注册后 broadcast 投入的实时帧 seq 必然更大，
+        # 同一事件循环内两步之间无 await，不存在丢帧/乱序窗口
+        snapshot = catchup_frames(b["q"] if b else [])
+        WATCHERS.setdefault(target, []).append((ws, q))
         try:
-            async for _ in ws:
-                pass
+            for x in snapshot:
+                q.put_nowait(json.dumps({"b": x[1], "k": x[2], "seq": x[0]},
+                                        ensure_ascii=False))
+            while True:
+                data = await q.get()
+                await ws.send(data)
+        except Exception:
+            pass
         finally:
             try:
-                WATCHERS[target].remove(ws)
+                WATCHERS[target].remove((ws, q))
             except Exception:
                 pass
     else:
@@ -269,11 +270,12 @@ async def ws_handler(ws, path=None):
 async def main():
     server = await asyncio.start_server(reader_writer, HOST, PORT)
     print("ls-relay listening on {}:{}".format(HOST, PORT), flush=True)
-    ws_task = None
     if websockets is not None:
-        ws_server = await websockets.serve(ws_handler, WS_HOST, WS_PORT)
+        # 关闭 keepalive ping：推流端为纯发送客户端，不保证及时回 Pong；
+        # 连接死活由发送队列写失败自然发现
+        await websockets.serve(ws_handler, WS_HOST, WS_PORT,
+                               ping_interval=None, ping_timeout=None)
         print("ls-relay ws listening on {}:{}".format(WS_HOST, WS_PORT), flush=True)
-        ws_task = ws_server
     async with server:
         await server.serve_forever()
 
