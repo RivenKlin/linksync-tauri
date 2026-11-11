@@ -129,6 +129,7 @@ jobs:
     needs: [windows-x64, windows-arm64, linux-arm64, macos]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: assets
