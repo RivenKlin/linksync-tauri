@@ -15,6 +15,5 @@ LinkSync 1.0.0 正式版，基于 Tauri 2 与 Rust 的跨平台文件同步客�
 | Windows x64 | LinkSync-1.0.0-windows-x64.exe |
 | Windows ARM64 | LinkSync-1.0.0-windows-arm64.exe |
 | Linux ARM64 | LinkSync-1.0.0-linux-arm64.deb |
-| macOS（Intel 与 Apple 芯片） | LinkSync-1.0.0-macos-universal.dmg |
 
-Windows 版本为单文件绿色程序，双击即可运行。Linux 版本通过 dpkg 安装，需系统具备 WebKitGTK 4.1。macOS 首次打开如提示来源不明，请在系统设置中允许打开。
+Windows 版本为单文件绿色程序，双击即可运行；ARM64 版本适用于骁龙等 ARM 平台设备。Linux 版本通过 dpkg 安装，需系统具备 WebKitGTK 4.1。
