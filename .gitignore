@@ -3,3 +3,7 @@ src-tauri/gen/
 payload/stage/
 payload/lx/
 payload/mc/
+release/
+out/
+__pycache__/
+server/accounts.json

@@ -1,6 +1,6 @@
 [package]
 name = "linksync"
-version = "2.2.0"
+version = "1.0.0"
 description = "LinkSync 四人文件自动同步"
 authors = ["duixiang"]
 edition = "2021"
