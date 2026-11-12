@@ -6,6 +6,8 @@ fn main() {
         "lspayload.zip"
     } else if target.contains("darwin") {
         "lspayload-mac.zip"
+    } else if target.contains("aarch64") {
+        "lspayload-linux-arm64.zip"
     } else {
         "lspayload-linux.zip"
     };
