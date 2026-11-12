@@ -3,7 +3,11 @@ use std::path::PathBuf;
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     let name = if target.contains("windows") {
-        "lspayload.zip"
+        if target.contains("aarch64") {
+            "lspayload-win-arm64.zip"
+        } else {
+            "lspayload.zip"
+        }
     } else if target.contains("darwin") {
         "lspayload-mac.zip"
     } else if target.contains("aarch64") {
